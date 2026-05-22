@@ -1,0 +1,7 @@
+{
+  "name": "Main Social up hub Final Version",
+  "description": "A premium, fully automated SMM Panel with a neon red/black theme, real-time updates, and UPI payment integration.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

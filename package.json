@@ -1,0 +1,42 @@
+{
+  "name": "main-social-up-hub-final-version",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "NODE_ENV=development tsx server.ts",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.89.0",
+    "@tailwindcss/vite": "^4.2.2",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "axios": "^1.15.0",
+    "cors": "^2.8.6",
+    "dompurify": "^3.3.3",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.3.2",
+    "helmet": "^8.1.0",
+    "http-proxy-middleware": "^3.0.5",
+    "jsdom": "^29.0.2",
+    "lucide-react": "^0.562.0",
+    "razorpay": "^2.9.6",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "react-router-dom": "^7.14.0",
+    "tailwindcss": "^4.2.2",
+    "tsx": "^4.21.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/dompurify": "^3.0.5",
+    "@types/jsdom": "^28.0.1",
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
+  }
+}

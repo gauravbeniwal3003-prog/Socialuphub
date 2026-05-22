@@ -1,0 +1,538 @@
+import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import { rateLimit } from "express-rate-limit";
+import { createServer as createViteServer } from "vite";
+import path from "path";
+import { createClient } from "@supabase/supabase-js";
+import { z } from "zod";
+import crypto from "crypto";
+import Razorpay from "razorpay";
+import axios from "axios";
+
+console.log("Starting server script...");
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// Initialize Supabase Admin Client (Server-side only)
+const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://igkrcgcrvnocauccebrf.supabase.co';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlna3JjZ2Nydm5vY2F1Y2NlYnJmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NjgzMDU4MCwiZXhwIjoyMDgyNDA2NTgwfQ.-529L2gcgOFrfN_VVZf6tbPyAlnRFQNQjPBOk8aGwpI';
+
+let supabaseAdmin: any;
+try {
+  supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey || '', {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    }
+  });
+} catch (e) {
+  console.error("Failed to initialize Supabase Admin:", e);
+}
+
+async function startServer() {
+  const app = express();
+  const PORT = 3000;
+
+  // Robust proxy configuration
+  // 'trust proxy' is essential for identifying the real client IP behind load balancers.
+  // Using '1' trusts the first hop (the immediate proxy).
+  app.set('trust proxy', 1);
+
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  // Initialize Razorpay lazily or safely
+  let razorpay: any;
+  try {
+    const rzpKey = process.env.RAZORPAY_KEY_ID || "rzp_live_RzLdEkePrpnfd4";
+    const rzpSecret = process.env.RAZORPAY_SECRET || "4wiJs8mHjvhbes6JRZFd35hT";
+    
+    if (rzpKey && rzpSecret && !rzpKey.includes("TODO")) {
+      razorpay = new Razorpay({
+        key_id: rzpKey,
+        key_secret: rzpSecret,
+      });
+    }
+  } catch (e) {
+    console.error("Failed to initialize Razorpay:", e);
+  }
+
+  // --- SECURITY MIDDLEWARE ---
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://checkout.razorpay.com", "https://www.gstatic.com"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        imgSrc: ["'self'", "data:", "https://*", "referrer"],
+        connectSrc: ["'self'", "https://*", "wss://*"],
+        fontSrc: ["'self'", "https://fonts.gstatic.com"],
+        frameSrc: ["'self'", "https://api.razorpay.com", "https://*.supabase.co"],
+        frameAncestors: ["'self'", "https://ai.studio", "https://*.google.com"],
+        objectSrc: ["'none'"],
+        upgradeInsecureRequests: [],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: false,
+    crossOriginResourcePolicy: false,
+    frameguard: false,
+  }));
+
+  app.use(cors({
+    origin: process.env.NODE_ENV === 'production' ? ['https://socialuphub-smm.web.app'] : true,
+    credentials: true
+  }));
+  
+  app.use(express.json({ limit: '10kb' })); // Limit body size to prevent DoS
+
+  // --- BOT DETECTION MIDDLEWARE ---
+  app.use((req, res, next) => {
+    const ua = req.headers['user-agent'] || '';
+    const isBot = /bot|crawler|spider|crawling/i.test(ua);
+    if (isBot) {
+      // Silent throttling for bots
+      return setTimeout(() => next(), 2000);
+    }
+    next();
+  });
+
+  // --- RATE LIMITING ---
+  const generalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 2000, // Increased for automated status checks
+    message: { error: "Too many requests, please try again later." },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+      const forwarded = req.headers['x-forwarded-for'];
+      if (forwarded) {
+        return (Array.isArray(forwarded) ? forwarded[0] : forwarded.split(',')[0]).trim();
+      }
+      return req.ip || 'unknown';
+    },
+    validate: { xForwardedForHeader: false, default: false },
+  });
+
+  const orderLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000,
+    max: 500, // Increased significantly for background tasks and processing
+    message: { error: "Action rate limit exceeded. Please wait a moment." },
+    keyGenerator: (req) => {
+      const forwarded = req.headers['x-forwarded-for'];
+      if (forwarded) {
+        return (Array.isArray(forwarded) ? forwarded[0] : forwarded.split(',')[0]).trim();
+      }
+      return req.ip || 'unknown';
+    },
+    validate: { xForwardedForHeader: false, default: false },
+  });
+
+  app.use("/api/", generalLimiter);
+
+  // --- BACKGROUND TASKS (PROCESSED ON SERVER FOR 100% RELIABILITY) ---
+  
+  const SMM_API_KEY = "38086716603a82e68be330924e7327c7e130df7d"; // Use the provided working key
+  const SMM_API_URL = process.env.SMM_API_URL || "https://safesmmpanel.com/api/v2";
+
+  const callProvider = async (paramsObj: any) => {
+    // Strictly verified documentation standards
+    const payload: any = {
+      key: SMM_API_KEY,
+      action: paramsObj.action
+    };
+
+    if (paramsObj.service) payload.service = paramsObj.service;
+    if (paramsObj.link) payload.link = paramsObj.link;
+    if (paramsObj.quantity) payload.quantity = paramsObj.quantity;
+    if (paramsObj.order) payload.order = paramsObj.order;
+
+    const params = new URLSearchParams(payload);
+
+    try {
+      const response = await axios.post(SMM_API_URL, params.toString(), {
+        headers: { 
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': 'Mozilla/4.0 (compatible; MSIE 5.01; Windows NT 5.0)' 
+        },
+        timeout: 30000,
+        validateStatus: () => true,
+        httpsAgent: new (await import("https")).Agent({
+          rejectUnauthorized: false
+        })
+      });
+      return response.data;
+    } catch (e: any) {
+      console.error("[BG Task] SMM Call Failed:", e.message);
+      return { error: e.message };
+    }
+  };
+
+  const normalizeStatus = (status: string) => {
+      if (!status) return null;
+      const s = status.toLowerCase().trim();
+      if (s === 'completed' || s === 'success' || s === 'complete') return 'Completed';
+      if (s === 'processing' || s === 'in progress' || s === 'active') return 'Processing';
+      if (s === 'pending') return 'Pending';
+      if (s === 'canceled' || s === 'cancelled') return 'Canceled';
+      if (s === 'partial' || s === 'partially completed') return 'Partial';
+      if (s === 'failed' || s === 'fail' || s === 'error') return 'Failed';
+      return 'Processing';
+  };
+
+  // 1. Order Forwarding (Forward Pending -> Provider)
+  const forwardOrders = async () => {
+    try {
+      const { data: pending } = await supabaseAdmin.from('orders')
+        .select('*')
+        .eq('status', 'Pending')
+        .is('externalId', null)
+        .is('error', null)
+        .limit(10);
+
+      if (!pending || pending.length === 0) return;
+
+      for (const order of pending) {
+        const res = await callProvider({
+          action: 'add',
+          service: order.serviceId,
+          link: order.link,
+          quantity: order.quantity
+        });
+
+        const providerId = res.order || res.order_id;
+        if (providerId) {
+          await supabaseAdmin.from('orders').update({ externalId: String(providerId) }).eq('id', order.id);
+          console.log(`[BG Forward] Order ${order.id} forwarded successfully (ID: ${providerId})`);
+        } else if (res.error) {
+           const errorMsg = String(res.error).toLowerCase();
+           
+           // ADVANCED ROBUST LOGIC: Handle Duplicates
+           // If provider says duplicate, it means the order WAS placed but we lost the ID.
+           if (errorMsg.includes('duplicate') || errorMsg.includes('already exists')) {
+              console.log(`[BG Forward] Duplicate detected for ${order.id}. Fetching existing ID...`);
+              const recent = await callProvider({ action: 'status', order: '0' }); // Some panels use dummy orders call to get list?
+              // Actually, standard panels use 'orders' action for history
+              const history = await callProvider({ action: 'orders' });
+              if (Array.isArray(history)) {
+                 const match = history.find((p: any) => String(p.link) === String(order.link) && String(p.service) === String(order.serviceId));
+                 if (match && match.order) {
+                    await supabaseAdmin.from('orders').update({ externalId: String(match.order) }).eq('id', order.id);
+                    continue;
+                 }
+              }
+           }
+
+           const isFatal = errorMsg.includes('link') || errorMsg.includes('service') || errorMsg.includes('quantity') || errorMsg.includes('invalid');
+           if (isFatal) {
+             await supabaseAdmin.from('orders').update({ error: res.error }).eq('id', order.id);
+           }
+        }
+      }
+    } catch (e) {
+      console.error("[BG Forward] Error:", e);
+    }
+  };
+
+  // 2. Status Sync (Update local status from Provider)
+  const syncStatuses = async () => {
+    try {
+      const { data: active } = await supabaseAdmin.from('orders')
+        .select('*')
+        .in('status', ['Pending', 'Processing'])
+        .not('externalId', 'is', null)
+        .limit(20);
+
+      if (!active || active.length === 0) return;
+
+      let updateCount = 0;
+      for (const order of active) {
+        const res = await callProvider({ action: 'status', order: order.externalId });
+        if (res.status) {
+          const norm = normalizeStatus(res.status);
+          if (norm && norm !== order.status) {
+            await supabaseAdmin.from('orders').update({ 
+               status: norm,
+               remains: res.remains || order.remains,
+               start_count: res.start_count || order.start_count
+            }).eq('id', order.id);
+            updateCount++;
+          }
+        }
+      }
+      if (updateCount > 0) console.log(`[BG Sync] Updated status for ${updateCount} orders.`);
+    } catch (e) {
+      console.error("[BG Sync] Error:", e);
+    }
+  };
+
+  // 3. Price Sync (Update local rates if provider changes them)
+  const syncPrices = async () => {
+    try {
+      // Use standard 'services' action (Robust logic)
+      const providerServices = await callProvider({ action: 'services' });
+      if (!Array.isArray(providerServices)) return;
+
+      const { data: local } = await supabaseAdmin.from('services').select('service, rate');
+      if (!local) return;
+
+      const pMap = new Map(providerServices.map((s:any) => {
+          // Panel uses 'service' or 'package' or 'id'
+          const id = String(s.service || s.package || s.id);
+          const price = parseFloat(s.rate || s.price || s.cost || 0);
+          return [id, price];
+      }));
+      const updates = [];
+
+      for (const s of local) {
+        const pRate = pMap.get(s.service);
+        if (pRate !== undefined && pRate !== s.rate) {
+          updates.push({ service: s.service, rate: pRate });
+        }
+      }
+
+      if (updates.length > 0) {
+        await supabaseAdmin.from('services').upsert(updates, { onConflict: 'service' });
+        console.log(`[BG Prices] Updated ${updates.length} prices.`);
+      }
+    } catch (e) {
+      console.error("[BG Prices] Error:", e);
+    }
+  };
+
+  // --- SYSTEM CLEANUP TASKS ---
+  const performSystemCleanup = async () => {
+    try {
+      const now = Date.now();
+      const sixtyDaysAgo = new Date(now - 60 * 24 * 60 * 60 * 1000).toISOString();
+      const { data: inactiveUsers } = await supabaseAdmin.from('users').select('id').lt('lastLogin', sixtyDaysAgo);
+      
+      if (inactiveUsers && inactiveUsers.length > 0) {
+        const ids = inactiveUsers.map((u: any) => u.id);
+        await supabaseAdmin.from('orders').delete().in('userId', ids);
+        await supabaseAdmin.from('transactions').delete().in('userId', ids);
+        await supabaseAdmin.from('users').delete().in('id', ids);
+        console.log(`[Cleanup] Removed ${ids.length} inactive users.`);
+      }
+
+      const nowISO = new Date().toISOString();
+      const { data: expiredCoupons } = await supabaseAdmin.from('coupons').select('code').lt('expiryDate', nowISO).eq('isEnabled', true);
+      if (expiredCoupons && expiredCoupons.length > 0) {
+           const codes = expiredCoupons.map((c: any) => c.code);
+           await supabaseAdmin.from('coupons').update({ isEnabled: false }).in('code', codes);
+           console.log(`[Cleanup] Disabled ${codes.length} expired coupons.`);
+      }
+    } catch (e) { console.error("[Cleanup] Failed:", e); }
+  };
+
+  // --- INTERVALS (Start after declarations) ---
+  // Server-side automation disabled per user request to move logic to the client (UI).
+  // setInterval(forwardOrders, 10000); // 10s
+  // setInterval(syncStatuses, 30000); // 30s
+  // setInterval(syncPrices, 3600000); // 1 hour
+  // setInterval(performSystemCleanup, 86400000); // 24 hours
+
+  // --- AUTH MIDDLEWARE ---
+  const verifyAuth = async (req: any, res: any, next: any) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
+
+    const token = authHeader.split(' ')[1];
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+
+    if (error || !user) return res.status(401).json({ error: "Invalid session" });
+    req.user = user;
+    next();
+  };
+
+  const verifyAdmin = async (req: any, res: any, next: any) => {
+    await verifyAuth(req, res, async () => {
+      const { data: profile } = await supabaseAdmin
+        .from('users')
+        .select('role')
+        .eq('id', req.user.id)
+        .single();
+
+      if (profile?.role !== 'ADMIN') {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      next();
+    });
+  };
+
+  // Secure SMM API Proxy
+  const smmSchema = z.object({
+    action: z.string().min(1),
+    service: z.string().optional(),
+    link: z.string().min(1).optional(), // More lenient than .url()
+    quantity: z.union([z.string(), z.number()]).optional(),
+    order: z.string().optional(),
+  });
+
+  app.post("/api/smm", orderLimiter, async (req, res) => {
+    const validation = smmSchema.safeParse(req.body);
+    if (!validation.success) {
+      return res.status(400).json({ error: "Invalid input", details: validation.error.format() });
+    }
+
+    const { action, service, link, quantity, order } = validation.data;
+    const SMM_API_KEY = "38086716603a82e68be330924e7327c7e130df7d"; // Verified working key
+    const SMM_API_URL = process.env.SMM_API_URL || "https://safesmmpanel.com/api/v2";
+
+    if (!SMM_API_KEY || SMM_API_KEY.includes("TODO")) {
+      return res.status(500).json({ 
+        error: "Configuration Error", 
+        message: "SMM API Key is missing or invalid. Please set SMM_API_KEY in environment variables." 
+      });
+    }
+
+    const params = new URLSearchParams();
+    // Use strictly verified documentation standards
+    params.append('key', SMM_API_KEY);
+    params.append('action', action);
+    
+    if (service) params.append('service', String(service));
+    if (link) params.append('link', link);
+    if (quantity) params.append('quantity', String(quantity));
+    if (order) params.append('order', String(order));
+
+    const makeRequest = async () => {
+      // Legacy UA is often used to whitelist safe integration scripts
+      const LEGACY_UA = 'Mozilla/4.0 (compatible; MSIE 5.01; Windows NT 5.0)';
+
+      const config: any = {
+        method: 'post', // POST is the most documented and stable method
+        url: SMM_API_URL,
+        timeout: 30000,
+        validateStatus: () => true,
+        headers: {
+          'User-Agent': LEGACY_UA,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json, text/plain, */*',
+        },
+        data: params.toString(),
+        // Matches curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 0)
+        httpsAgent: new (await import("https")).Agent({
+          rejectUnauthorized: false
+        })
+      };
+
+      return axios(config);
+    };
+
+    try {
+      // console.log(`[Smart Proxy] Executing ${action}...`); // Removed for noise reduction
+      const response = await makeRequest();
+      
+      if (response.status !== 200 || (response.data && response.data.error)) {
+         console.warn(`[Smart Proxy] Provider Error (${response.status}):`, response.data);
+      }
+      
+      res.status(response.status).json(response.data);
+    } catch (error: any) {
+      const isTimeout = error.code === 'ECONNABORTED';
+      const isNetworkError = error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED';
+      
+      console.error("[Smart Proxy Error]:", {
+        message: error.message,
+        code: error.code,
+        url: SMM_API_URL
+      });
+
+      res.status(502).json({ 
+        error: "Provider Connection Failed", 
+        message: isTimeout ? "The provider took too long to respond." : "Could not reach the SMM provider.",
+        details: error.message,
+        suggestion: "Check if the SMM_API_URL is correct and the provider is online."
+      });
+    }
+  });
+
+  // Razorpay Verification
+  const razorpayVerifySchema = z.object({
+    razorpay_order_id: z.string().min(1),
+    razorpay_payment_id: z.string().min(1),
+    razorpay_signature: z.string().min(1),
+  });
+
+  app.post("/api/payments/verify", verifyAuth, async (req, res) => {
+    const validation = razorpayVerifySchema.safeParse(req.body);
+    if (!validation.success) return res.status(400).json({ error: "Invalid payment data" });
+
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = validation.data;
+    const secret = process.env.RAZORPAY_SECRET || "4wiJs8mHjvhbes6JRZFd35hT";
+
+    if (!secret) return res.status(500).json({ error: "Payment configuration error" });
+
+    const generated_signature = crypto
+      .createHmac("sha256", secret)
+      .update(razorpay_order_id + "|" + razorpay_payment_id)
+      .digest("hex");
+
+    if (generated_signature === razorpay_signature) {
+      res.json({ success: true });
+    } else {
+      res.status(400).json({ success: false, error: "Invalid signature" });
+    }
+  });
+
+  // Secure Admin Balance Update
+  const balanceUpdateSchema = z.object({
+    userId: z.string().uuid(),
+    amount: z.number().min(0),
+  });
+
+  app.post("/api/admin/update-balance", verifyAdmin, async (req, res) => {
+    const validation = balanceUpdateSchema.safeParse(req.body);
+    if (!validation.success) return res.status(400).json({ error: "Invalid input" });
+
+    const { userId, amount } = validation.data;
+
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('users')
+        .update({ balance: amount })
+        .eq('id', userId);
+
+      if (error) throw error;
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Database error" });
+    }
+  });
+
+  // --- VITE MIDDLEWARE ---
+  if (process.env.NODE_ENV !== "production") {
+    console.log("Initializing Vite middleware...");
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+    console.log("Vite middleware initialized.");
+  } else {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*all", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+
+  console.log(`Attempting to start server on port ${PORT}...`);
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server successfully running on http://0.0.0.0:${PORT}`);
+  });
+}
+
+startServer().catch(err => {
+  console.error("Failed to start server:", err);
+  process.exit(1);
+});

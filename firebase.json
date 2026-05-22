@@ -1,0 +1,35 @@
+{
+  "hosting": {
+    "public": "dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "headers": [
+      {
+        "source": "/sitemap.xml",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/xml; charset=utf-8"
+          },
+          {
+            "key": "X-Robots-Tag",
+            "value": "all"
+          }
+        ]
+      }
+    ],
+    "rewrites": [
+      {
+        "source": "!/@(sitemap.xml|robots.txt)",
+        "destination": "/index.html"
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}
