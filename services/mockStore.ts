@@ -1069,27 +1069,8 @@ export const activateServiceById = async (id: string) => { await supabase.from('
 export const syncCategoriesFromDB = async () => 0;
 
 export const startAutoSync = () => { 
-    performSystemCleanup(); 
-    // Run immediately once
-    processOrderQueue().catch(console.warn);
-    syncOrderStatuses().catch(console.warn);
-    syncPricesFromProvider().catch(console.warn);
-    
-    // RE-ENABLED CLIENT SIDE AUTOMATION PER USER REQUEST
-    // Note: This only runs while the browser tab is open.
-    const i = setInterval(() => {
-        processOrderQueue().catch(console.warn);
-    }, 15000); 
-
-    const j = setInterval(() => {
-        syncOrderStatuses().catch(console.warn);
-    }, 45000);
-
-    const k = setInterval(() => {
-        syncPricesFromProvider().catch(console.warn);
-    }, 600000); 
-
-    return () => { clearInterval(i); clearInterval(j); clearInterval(k); };
+    // Automation is fully offloaded to the server-side hosted backend.
+    return () => {}; 
 }
 export const checkUsernameUnique = async (n: string) => { 
     try {

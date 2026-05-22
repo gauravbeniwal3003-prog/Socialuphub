@@ -54,10 +54,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (user) {
-        // AUTOMATION: Run background processes (Order status, Forwarding) from user device
-        // This ensures orders are processed without a dedicated autonomous server loop.
-        const stopSync = startAutoSync();
-        return () => stopSync();
+        // Automation is handled securely and automatically server-side.
     }
   }, [user]);
 

@@ -334,11 +334,11 @@ async function startServer() {
   };
 
   // --- INTERVALS (Start after declarations) ---
-  // Server-side automation disabled per user request to move logic to the client (UI).
-  // setInterval(forwardOrders, 10000); // 10s
-  // setInterval(syncStatuses, 30000); // 30s
-  // setInterval(syncPrices, 3600000); // 1 hour
-  // setInterval(performSystemCleanup, 86400000); // 24 hours
+  // Server-side automation re-enabled for deployment on Render.
+  setInterval(forwardOrders, 10000); // 10s
+  setInterval(syncStatuses, 30000); // 30s
+  setInterval(syncPrices, 3600000); // 1 hour
+  setInterval(performSystemCleanup, 86400000); // 24 hours
 
   // --- AUTH MIDDLEWARE ---
   const verifyAuth = async (req: any, res: any, next: any) => {
