@@ -63,22 +63,22 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     <div className="min-h-screen flex flex-col lg:flex-row bg-[var(--app-bg)] text-[var(--app-text)] font-sans selection:bg-[var(--app-accent)]/30 selection:text-[var(--app-text)]">
       
       {/* --- MOBILE TOP HEADER --- */}
-      <div className="lg:hidden fixed top-0 w-full z-40 bg-[var(--app-sidebar-bg)]/95 backdrop-blur-md border-b border-[var(--app-border)] px-4 py-3 flex items-center justify-between shadow-lg">
-         <Logo className="scale-90 origin-left" />
-         <div className="flex items-center gap-3">
+      <div className="lg:hidden fixed top-0 left-0 right-0 z-40 bg-[var(--app-sidebar-bg)]/95 backdrop-blur-md border-b border-[var(--app-border)] px-3 py-2.5 flex items-center justify-between shadow-lg">
+         <Logo className="scale-80 sm:scale-90 origin-left shrink-0" />
+         <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
             <button 
               onClick={toggleTheme} 
-              className="text-[var(--app-accent)] hover:opacity-80 transition-opacity p-2 rounded-lg bg-[var(--app-accent)]/10 focus:outline-none"
+              className="text-[var(--app-accent)] hover:opacity-80 transition-opacity p-1.5 sm:p-2 rounded-lg bg-[var(--app-accent)]/10 focus:outline-none shrink-0"
               title="Toggle Theme"
             >
-              {isDark ? <Sun size={18} /> : <Moon size={18} />}
+              {isDark ? <Sun size={16} /> : <Moon size={16} />}
             </button>
-            <a href={CONTACT_WHATSAPP_URL} target="_blank" rel="noreferrer" className="text-green-500 hover:text-green-400 transition-colors">
-              <MessageCircle size={24} />
+            <a href={CONTACT_WHATSAPP_URL} target="_blank" rel="noreferrer" className="text-green-500 hover:text-green-400 transition-colors shrink-0">
+              <MessageCircle size={20} className="sm:w-6 sm:h-6" />
             </a>
-            <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] rounded-lg px-3 py-1.5 flex items-center gap-2">
-               <span className="text-xs font-bold text-[var(--app-text-muted)]">Balance</span>
-               <span className="text-sm font-black text-[var(--app-text)]">{CURRENCY_SYMBOL}{(user?.balance || 0).toFixed(2)}</span>
+            <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] rounded-full px-2.5 py-1 flex items-center gap-1 shrink-0 shadow-sm">
+               <span className="text-[10px] font-bold text-[var(--app-text-muted)] hidden sm:inline uppercase tracking-wider">Balance</span>
+               <span className="text-xs sm:text-sm font-black text-[var(--app-text)] font-mono">{CURRENCY_SYMBOL}{(user?.balance || 0).toFixed(2)}</span>
             </div>
          </div>
       </div>

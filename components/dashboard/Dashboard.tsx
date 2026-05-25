@@ -153,13 +153,13 @@ const NewOrderSection = () => {
             <div className="bg-gradient-to-r from-[var(--app-accent)] to-[var(--app-accent)]/85 rounded-3xl p-6 text-white shadow-[0_10px_30px_-10px_rgba(46,189,89,0.35)] relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl -mr-10 -mt-10"></div>
                 <div className="relative z-10">
-                    <div className="flex justify-between items-start mb-6">
-                        <div>
-                            <p className="text-green-50 text-sm font-medium mb-1">Welcome,</p>
-                            <h2 className="text-2xl font-black uppercase tracking-tight truncate max-w-[200px]">{user?.name}</h2>
+                    <div className="flex flex-wrap justify-between items-center gap-3 mb-6">
+                        <div className="min-w-0">
+                            <p className="text-green-50 text-xs sm:text-sm font-medium mb-1">Welcome,</p>
+                            <h2 className="text-xl sm:text-2xl font-black uppercase tracking-tight truncate max-w-[160px] xs:max-w-[200px] sm:max-w-[300px]">{user?.name}</h2>
                         </div>
-                        <button className="bg-white/20 backdrop-blur-sm px-4 py-2 rounded-full text-xs font-bold flex items-center gap-2 hover:bg-white/30 transition-colors">
-                            <PlayCircle size={14} fill="white" className="text-[var(--app-accent)]"/> Watch Demo
+                        <button className="bg-white/20 border border-white/10 backdrop-blur-sm px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-full text-[10px] sm:text-xs font-bold flex items-center gap-1.5 hover:bg-white/30 transition-all shrink-0">
+                            <PlayCircle size={12} fill="white" className="text-[var(--app-accent)]"/> Watch Demo
                         </button>
                     </div>
                     
@@ -352,14 +352,14 @@ const OrdersSection = () => {
             <div className="grid gap-4 md:hidden">
                 {userOrders.map(order => (
                     <div key={order.id} className="bg-[var(--app-card-bg)] border border-[var(--app-border)] rounded-2xl p-5 relative overflow-hidden shadow-sm">
-                        <div className="flex justify-between items-start mb-3">
-                            <div className="flex items-center gap-2">
-                                <div className="bg-[var(--app-bg)] border border-[var(--app-border)] px-2.5 py-1.5 rounded-lg text-[var(--app-text)] font-mono text-xs font-semibold">{order.id}</div>
-                                <a href={order.link} target="_blank" rel="noreferrer" className="text-blue-500 text-xs truncate max-w-[120px] flex items-center gap-1 font-bold">
-                                    <ExternalLink size={10}/> Link
+                        <div className="flex flex-wrap justify-between items-center gap-2 mb-3 pb-2.5 border-b border-[var(--app-border)]/40">
+                            <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                                <div className="bg-[var(--app-bg)] border border-[var(--app-border)] px-2 py-1 rounded-lg text-[var(--app-text)] font-mono text-[10px] sm:text-xs font-semibold shrink-0">{order.id}</div>
+                                <a href={order.link} target="_blank" rel="noreferrer" className="text-blue-500 text-[11px] truncate max-w-[90px] xs:max-w-[120px] sm:max-w-[180px] flex items-center gap-0.5 font-bold hover:underline py-1">
+                                    <ExternalLink size={10} className="shrink-0"/> Link
                                 </a>
                             </div>
-                            <span className={`px-2 py-1 rounded text-[10px] font-bold border uppercase ${statusColors[order.status] || 'text-gray-500'}`}>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-black border uppercase tracking-wider shrink-0 shadow-sm ${statusColors[order.status] || 'text-gray-500'}`}>
                                 {order.status}
                             </span>
                         </div>
