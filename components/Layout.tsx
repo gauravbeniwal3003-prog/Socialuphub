@@ -23,12 +23,12 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   // Dynamic Theme state and listener
   const [isDark, setIsDark] = useState(() => {
-    return localStorage.getItem('theme-mode') !== 'light';
+    return localStorage.getItem('theme-mode') === 'dark';
   });
 
   useEffect(() => {
     const handleThemeToggle = () => {
-      setIsDark(localStorage.getItem('theme-mode') !== 'light');
+      setIsDark(localStorage.getItem('theme-mode') === 'dark');
     };
     window.addEventListener('theme-changed', handleThemeToggle);
     return () => window.removeEventListener('theme-changed', handleThemeToggle);

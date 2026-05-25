@@ -25,7 +25,7 @@ interface DynamicThemeProps {
 
 const DynamicTheme: React.FC<DynamicThemeProps> = () => {
   const [isDark, setIsDark] = useState(() => {
-    return localStorage.getItem('theme-mode') !== 'light';
+    return localStorage.getItem('theme-mode') === 'dark';
   });
 
   useEffect(() => {
