@@ -156,26 +156,35 @@ const NewOrderSection = () => {
                     <div className="flex flex-wrap justify-between items-center gap-3 mb-6">
                         <div className="min-w-0">
                             <p className="text-green-50 text-xs sm:text-sm font-medium mb-1">Welcome,</p>
-                            <h2 className="text-xl sm:text-2xl font-black uppercase tracking-tight truncate max-w-[160px] xs:max-w-[200px] sm:max-w-[300px]">{user?.name}</h2>
+                            <h2 
+                                className="font-black uppercase tracking-tight whitespace-nowrap"
+                                style={{
+                                    fontSize: user?.name 
+                                        ? `${Math.max(13, Math.min(24, 280 / Math.max(10, user.name.length)))}px` 
+                                        : '1.25rem'
+                                }}
+                            >
+                                {user?.name}
+                            </h2>
                         </div>
                         <button className="bg-white/20 border border-white/10 backdrop-blur-sm px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-full text-[10px] sm:text-xs font-bold flex items-center gap-1.5 hover:bg-white/30 transition-all shrink-0">
                             <PlayCircle size={12} fill="white" className="text-[var(--app-accent)]"/> Watch Demo
                         </button>
                     </div>
                     
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="bg-black/20 backdrop-blur-md rounded-2xl p-3 flex items-center gap-3 border border-white/10">
-                            <div className="bg-white/20 p-2 rounded-lg"><Wallet size={20}/></div>
-                            <div>
-                                <p className="text-xs text-green-50 font-bold opacity-80">Balance</p>
-                                <p className="text-lg font-black">{CURRENCY_SYMBOL}{(user?.balance || 0).toFixed(2)}</p>
+                    <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                        <div className="bg-black/20 backdrop-blur-md rounded-2xl p-2.5 sm:p-3 flex flex-col sm:flex-row items-center sm:items-center text-center sm:text-left gap-1.5 sm:gap-3 border border-white/10 min-w-0">
+                            <div className="bg-white/20 p-1.5 sm:p-2 rounded-lg shrink-0"><Wallet size={16} className="sm:w-5 sm:h-5"/></div>
+                            <div className="min-w-0 w-full">
+                                <p className="text-[10px] sm:text-xs text-green-50 font-bold opacity-80 uppercase tracking-tight truncate">Balance</p>
+                                <p className="text-sm sm:text-lg font-black truncate">{CURRENCY_SYMBOL}{(user?.balance || 0).toFixed(2)}</p>
                             </div>
                         </div>
-                        <div className="bg-black/20 backdrop-blur-md rounded-2xl p-3 flex items-center gap-3 border border-white/10">
-                            <div className="bg-white/20 p-2 rounded-lg"><ShoppingBag size={20}/></div>
-                            <div>
-                                <p className="text-xs text-green-50 font-bold opacity-80">Your Orders</p>
-                                <p className="text-lg font-black">{userOrderCount}</p>
+                        <div className="bg-black/20 backdrop-blur-md rounded-2xl p-2.5 sm:p-3 flex flex-col sm:flex-row items-center sm:items-center text-center sm:text-left gap-1.5 sm:gap-3 border border-white/10 min-w-0">
+                            <div className="bg-white/20 p-1.5 sm:p-2 rounded-lg shrink-0"><ShoppingBag size={16} className="sm:w-5 sm:h-5"/></div>
+                            <div className="min-w-0 w-full">
+                                <p className="text-[10px] sm:text-xs text-green-50 font-bold opacity-80 uppercase tracking-tight truncate">Orders</p>
+                                <p className="text-sm sm:text-lg font-black truncate">{userOrderCount}</p>
                             </div>
                         </div>
                     </div>
