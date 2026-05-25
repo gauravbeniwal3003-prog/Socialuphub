@@ -300,9 +300,13 @@ def smm_proxy():
 
 # App Heat-Check Endpoint
 @app.route("/", methods=["GET"])
+@app.route("/ping", methods=["GET"])
+@app.route("/health", methods=["GET"])
+@app.route("/api/health", methods=["GET"])
 def health_check():
     return jsonify({
         "status": "online",
+        "message": "pong",
         "service": "SocialUpHub-Autonomous-Python-Backend",
         "supabase_connection": SUPABASE_URL is not None,
         "smm_endpoint": SMM_API_URL
