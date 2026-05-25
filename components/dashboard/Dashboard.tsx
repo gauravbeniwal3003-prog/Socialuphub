@@ -10,6 +10,23 @@ import { Search, Wallet, RefreshCw, X, MessageCircle, Lock, Edit2, ShieldCheck, 
 import { ReferralSection } from './ReferralSection';
 import { Logo } from '../ui/Logo';
 
+const cleanServiceName = (name: string): string => {
+    if (!name) return "";
+    return name
+        .replace(/\[\s*refill\s*\d*\s*days?\s*\]/gi, '')
+        .replace(/\(\s*refill\s*\d*\s*days?\s*\)/gi, '')
+        .replace(/\[\s*\d*\s*days?\s*refill\s*\]/gi, '')
+        .replace(/\(\s*\d*\s*days?\s*refill\s*\)/gi, '')
+        .replace(/\[\s*refill\s*\]/gi, '')
+        .replace(/\(\s*refill\s*\)/gi, '')
+        .replace(/refill\s*\d*\s*days?/gi, '')
+        .replace(/\d*\s*days?\s*refill/gi, '')
+        .replace(/\[\s*\d*\s+days\s*\]/gi, '')
+        .replace(/\(\s*\d*\s+days\s*\)/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+};
+
 declare const Razorpay: any;
 
 const CustomDropdown = ({ options, value, onChange, placeholder }: { options: string[], value: string, onChange: (val: string) => void, placeholder: string }) => {
@@ -29,25 +46,25 @@ const CustomDropdown = ({ options, value, onChange, placeholder }: { options: st
   return (
     <div className="relative w-full" ref={ref}>
       <div 
-        className="w-full bg-[#1a1a1a] border border-neutral-800 rounded-xl px-4 py-3.5 text-white cursor-pointer flex justify-between items-center hover:border-red-600/50 transition-colors text-sm"
+        className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl px-4 py-3.5 text-[var(--app-text)] cursor-pointer flex justify-between items-center hover:border-[var(--app-accent)]/50 transition-colors text-sm"
         onClick={() => setIsOpen(!isOpen)}
       >
-        <span className={`block truncate ${value ? 'text-white' : 'text-neutral-500'}`}>{value || placeholder}</span>
-        <ChevronDown size={16} className={`shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <span className={`block truncate ${value ? 'text-[var(--app-text)]' : 'text-[var(--app-text-muted)]'}`}>{value || placeholder}</span>
+        <ChevronDown size={16} className={`shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''} text-[var(--app-text-muted)]`} />
       </div>
       
       {isOpen && (
-        <div className="absolute z-50 w-full mt-2 bg-[#1a1a1a] border border-neutral-700 rounded-xl shadow-xl max-h-60 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in duration-100">
+        <div className="absolute z-50 w-full mt-2 bg-[var(--app-card-bg)] border border-[var(--app-border)] rounded-xl shadow-xl max-h-60 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in duration-100">
            {options.length > 0 ? options.map(opt => (
              <div 
                key={opt} 
-               className="px-4 py-3 hover:bg-red-900/20 hover:text-red-400 cursor-pointer text-sm text-gray-300 transition-colors border-b border-neutral-800/50 last:border-0"
+               className="px-4 py-3 hover:bg-[var(--app-accent)]/15 hover:text-[var(--app-accent)] cursor-pointer text-sm text-[var(--app-text)] transition-colors border-b border-[var(--app-border)]/55 last:border-0 font-medium"
                onClick={() => { onChange(opt); setIsOpen(false); }}
              >
                {opt}
              </div>
            )) : (
-             <div className="px-4 py-3 text-xs text-gray-500 text-center">No results found</div>
+             <div className="px-4 py-3 text-xs text-[var(--app-text-muted)] text-center">No results found</div>
            )}
         </div>
       )}
@@ -100,7 +117,7 @@ const NewOrderSection = () => {
     const selectedService = useMemo(() => services.find(s => s.service === selectedServiceId), [services, selectedServiceId]);
     
     const serviceOptions = useMemo(() => {
-        let opts = filteredServices.map(s => `${s.service} - ${s.name} - ${CURRENCY_SYMBOL}${calculateFinalPrice(s, config).toFixed(2)}`);
+        let opts = filteredServices.map(s => `${s.service} - ${cleanServiceName(s.name)} - ${CURRENCY_SYMBOL}${calculateFinalPrice(s, config).toFixed(2)}`);
         // Global Search Filter
         if (searchTerm) {
             opts = opts.filter(s => s.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -133,16 +150,16 @@ const NewOrderSection = () => {
             {notification && <Notification message={notification.msg} type={notification.type} onClose={() => setNotification(null)} />}
             
             {/* WELCOME CARD */}
-            <div className="bg-gradient-to-r from-red-600 to-red-800 rounded-3xl p-6 text-white shadow-[0_10px_30px_-10px_rgba(220,38,38,0.5)] relative overflow-hidden">
+            <div className="bg-gradient-to-r from-[var(--app-accent)] to-[var(--app-accent)]/85 rounded-3xl p-6 text-white shadow-[0_10px_30px_-10px_rgba(46,189,89,0.35)] relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl -mr-10 -mt-10"></div>
                 <div className="relative z-10">
                     <div className="flex justify-between items-start mb-6">
                         <div>
-                            <p className="text-red-100 text-sm font-medium mb-1">Welcome,</p>
+                            <p className="text-green-50 text-sm font-medium mb-1">Welcome,</p>
                             <h2 className="text-2xl font-black uppercase tracking-tight truncate max-w-[200px]">{user?.name}</h2>
                         </div>
                         <button className="bg-white/20 backdrop-blur-sm px-4 py-2 rounded-full text-xs font-bold flex items-center gap-2 hover:bg-white/30 transition-colors">
-                            <PlayCircle size={14} fill="white" className="text-red-600"/> Watch Demo
+                            <PlayCircle size={14} fill="white" className="text-[var(--app-accent)]"/> Watch Demo
                         </button>
                     </div>
                     
@@ -150,14 +167,14 @@ const NewOrderSection = () => {
                         <div className="bg-black/20 backdrop-blur-md rounded-2xl p-3 flex items-center gap-3 border border-white/10">
                             <div className="bg-white/20 p-2 rounded-lg"><Wallet size={20}/></div>
                             <div>
-                                <p className="text-xs text-red-100 font-bold opacity-80">Balance</p>
+                                <p className="text-xs text-green-50 font-bold opacity-80">Balance</p>
                                 <p className="text-lg font-black">{CURRENCY_SYMBOL}{(user?.balance || 0).toFixed(2)}</p>
                             </div>
                         </div>
                         <div className="bg-black/20 backdrop-blur-md rounded-2xl p-3 flex items-center gap-3 border border-white/10">
                             <div className="bg-white/20 p-2 rounded-lg"><ShoppingBag size={20}/></div>
                             <div>
-                                <p className="text-xs text-red-100 font-bold opacity-80">Your Orders</p>
+                                <p className="text-xs text-green-50 font-bold opacity-80">Your Orders</p>
                                 <p className="text-lg font-black">{userOrderCount}</p>
                             </div>
                         </div>
@@ -167,21 +184,21 @@ const NewOrderSection = () => {
 
             {/* ACTION BUTTONS - Subscription removed as requested */}
             <div>
-                <button className="w-full bg-red-600 text-white font-bold py-3 rounded-xl shadow-lg border border-red-500/50 flex items-center justify-center gap-2">
+                <button className="w-full bg-[var(--app-accent)] text-white font-bold py-3 rounded-xl shadow-lg border border-[var(--app-accent)]/50 flex items-center justify-center gap-2 hover:bg-[var(--app-accent-hover)] transition-all">
                     <Zap size={18} /> New Instant Order
                 </button>
             </div>
 
             {/* ORDER FORM */}
-            <div className="bg-[#0a0a0a] rounded-2xl border border-neutral-800 overflow-hidden">
+            <div className="bg-[var(--app-card-bg)] rounded-2xl border border-[var(--app-border)] shadow-xl overflow-hidden">
                 {/* Filters */}
-                <div className="p-4 border-b border-neutral-800 overflow-x-auto no-scrollbar">
+                <div className="p-4 border-b border-[var(--app-border)] overflow-x-auto no-scrollbar bg-[var(--app-sidebar-bg)]/40">
                     <div className="flex gap-3">
                         {['All', 'Instagram', 'YouTube', 'Facebook', 'Twitter', 'TikTok'].map((filter, i) => (
                             <button 
                                 key={i} 
                                 onClick={() => { setActiveFilter(filter); setSelectedCategory(''); setSelectedServiceId(''); }}
-                                className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${activeFilter === filter ? 'bg-white text-black' : 'bg-[#1a1a1a] text-gray-400 border border-neutral-800'}`}
+                                className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-all ${activeFilter === filter ? 'bg-[var(--app-accent)] text-white shadow-[0_4px_12px_rgba(34,197,94,0.3)]' : 'bg-[var(--app-input-bg)] text-[var(--app-text-muted)] border border-[var(--app-border)] hover:border-[var(--app-accent)]/30'}`}
                             >
                                 {filter === 'Instagram' && <Instagram size={12}/>}
                                 {filter === 'YouTube' && <Youtube size={12}/>}
@@ -196,9 +213,9 @@ const NewOrderSection = () => {
                 <div className="p-5 space-y-6">
                     {/* Search */}
                     <div className="relative">
-                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={18}/>
+                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[var(--app-text-muted)]" size={18}/>
                         <input 
-                            className="w-full bg-[#1a1a1a] border border-neutral-800 rounded-xl pl-11 pr-4 py-3.5 text-sm text-white focus:border-red-600 outline-none" 
+                            className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl pl-11 pr-4 py-3.5 text-sm text-[var(--app-text)] placeholder-[var(--app-text-muted)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)]/30 outline-none transition-all" 
                             placeholder="Search category or service..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
@@ -208,39 +225,35 @@ const NewOrderSection = () => {
                     {/* Dropdowns */}
                     <div className="space-y-4">
                         <div>
-                            <label className="text-xs font-bold text-gray-500 mb-2 block ml-1 uppercase tracking-wider">Category</label>
+                            <label className="text-xs font-bold text-[var(--app-text-muted)] mb-2 block ml-1 uppercase tracking-wider">Category</label>
                             <CustomDropdown options={categoryNames} value={selectedCategory} onChange={(val) => { setSelectedCategory(val); setSelectedServiceId(''); }} placeholder="Select Category" />
                         </div>
                         <div>
-                            <label className="text-xs font-bold text-gray-500 mb-2 block ml-1 uppercase tracking-wider">Service</label>
-                            <CustomDropdown options={serviceOptions} value={selectedService ? `${selectedService.service} - ${selectedService.name}` : ''} onChange={(val) => setSelectedServiceId(val.split(' - ')[0])} placeholder="Select Service" />
+                            <label className="text-xs font-bold text-[var(--app-text-muted)] mb-2 block ml-1 uppercase tracking-wider">Service</label>
+                            <CustomDropdown options={serviceOptions} value={selectedService ? `${selectedService.service} - ${cleanServiceName(selectedService.name)}` : ''} onChange={(val) => setSelectedServiceId(val.split(' - ')[0])} placeholder="Select Service" />
                         </div>
                     </div>
 
                     {/* Service Details Grid */}
                     {selectedService && (
-                        <div className="bg-[#111] rounded-xl border border-neutral-800 p-4">
-                            <div className="grid grid-cols-3 gap-4 text-center mb-4">
+                        <div className="bg-[var(--app-accent)]/5 rounded-xl border border-[var(--app-accent)]/20 p-4 animate-in fade-in duration-300">
+                            <div className="grid grid-cols-2 gap-4 text-center mb-4">
                                 <div className="space-y-1">
-                                    <div className="text-gray-500 text-[10px] uppercase font-bold flex items-center justify-center gap-1"><Clock size={10}/> Start Time</div>
-                                    <div className="text-white font-bold text-xs">INSTANT</div>
+                                    <div className="text-[var(--app-text-muted)] text-[10px] uppercase font-bold flex items-center justify-center gap-1"><Clock size={11} className="text-[var(--app-accent)]"/> Start Time</div>
+                                    <div className="text-[var(--app-text)] font-extrabold text-xs">INSTANT</div>
                                 </div>
-                                <div className="space-y-1 border-x border-neutral-800">
-                                    <div className="text-gray-500 text-[10px] uppercase font-bold flex items-center justify-center gap-1"><Zap size={10}/> Speed</div>
-                                    <div className="text-white font-bold text-xs">SUPER FAST</div>
-                                </div>
-                                <div className="space-y-1">
-                                    <div className="text-gray-500 text-[10px] uppercase font-bold flex items-center justify-center gap-1"><RefreshCw size={10}/> Refill</div>
-                                    <div className="text-white font-bold text-xs">30 DAYS</div>
+                                <div className="space-y-1 border-l border-[var(--app-border)]">
+                                    <div className="text-[var(--app-text-muted)] text-[10px] uppercase font-bold flex items-center justify-center gap-1"><Zap size={11} className="text-[var(--app-accent)]"/> Speed</div>
+                                    <div className="text-[var(--app-text)] font-extrabold text-xs">SUPER FAST</div>
                                 </div>
                             </div>
                             
                             {/* Description Toggle/Preview */}
-                            <div className="text-xs text-gray-400 bg-[#1a1a1a] p-3 rounded-lg border border-neutral-800">
-                                <p className="mb-2 text-white font-bold flex items-center gap-1">
-                                    <ShieldCheck size={14} className="text-red-500"/> Service Description:
+                            <div className="text-xs text-[var(--app-text-muted)] bg-[var(--app-input-bg)] p-3 rounded-xl border border-[var(--app-border)] leading-relaxed">
+                                <p className="mb-2 text-[var(--app-text)] font-bold flex items-center gap-1">
+                                    <ShieldCheck size={14} className="text-[var(--app-accent)]"/> Service Description:
                                 </p>
-                                <div className="opacity-80 whitespace-pre-wrap break-words leading-relaxed max-h-[150px] overflow-y-auto custom-scrollbar pr-2">
+                                <div className="opacity-90 whitespace-pre-wrap break-words leading-relaxed max-h-[150px] overflow-y-auto custom-scrollbar pr-2">
                                     {selectedService.description ? (
                                         selectedService.description
                                     ) : (
@@ -258,26 +271,26 @@ const NewOrderSection = () => {
                     {/* Link & Qty */}
                     <div className="space-y-4">
                         <div>
-                            <label className="text-xs font-bold text-gray-500 mb-2 block ml-1 uppercase tracking-wider">Link</label>
-                            <input className="w-full bg-[#1a1a1a] border border-neutral-800 rounded-xl px-4 py-3.5 text-sm text-white focus:border-red-600 outline-none placeholder-gray-600" placeholder="https://..." value={link} onChange={e => setLink(e.target.value)} />
-                            <p className="text-[10px] text-gray-500 mt-1 ml-1">Account must be public.</p>
+                            <label className="text-xs font-bold text-[var(--app-text-muted)] mb-2 block ml-1 uppercase tracking-wider">Link</label>
+                            <input className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl px-4 py-3.5 text-sm text-[var(--app-text)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)]/30 outline-none placeholder-[var(--app-text-muted)]" placeholder="https://..." value={link} onChange={e => setLink(e.target.value)} />
+                            <p className="text-[10px] text-[var(--app-text-muted)] mt-1 ml-1 font-medium">Account must be public.</p>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                             <div>
-                                <label className="text-xs font-bold text-gray-500 mb-2 block ml-1 uppercase tracking-wider">Quantity</label>
-                                <input className="w-full bg-[#1a1a1a] border border-neutral-800 rounded-xl px-4 py-3.5 text-sm text-white focus:border-red-600 outline-none" type="number" placeholder="1000" value={quantity} onChange={e => setQuantity(e.target.value)} />
-                                {selectedService && <p className="text-[10px] text-gray-500 mt-1 ml-1">Min: {selectedService.min} - Max: {selectedService.max}</p>}
+                                <label className="text-xs font-bold text-[var(--app-text-muted)] mb-2 block ml-1 uppercase tracking-wider">Quantity</label>
+                                <input className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl px-4 py-3.5 text-sm text-[var(--app-text)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)]/30 outline-none" type="number" placeholder="1000" value={quantity} onChange={e => setQuantity(e.target.value)} />
+                                {selectedService && <p className="text-[10px] text-[var(--app-text-muted)] mt-1 ml-1 font-medium">Min: {selectedService.min} - Max: {selectedService.max}</p>}
                             </div>
                             <div>
-                                <label className="text-xs font-bold text-gray-500 mb-2 block ml-1 uppercase tracking-wider">Charge</label>
-                                <div className="w-full bg-[#050505] border border-neutral-800 rounded-xl px-4 py-3.5 text-sm text-white font-mono flex items-center justify-between">
-                                    <span className="text-red-500 font-bold">{CURRENCY_SYMBOL}{finalTotal.toFixed(2)}</span>
+                                <label className="text-xs font-bold text-[var(--app-text-muted)] mb-2 block ml-1 uppercase tracking-wider">Charge</label>
+                                <div className="w-full bg-[var(--app-bg)] border border-[var(--app-border)] rounded-xl px-4 py-3.5 text-sm text-[var(--app-text)] font-mono flex items-center justify-between">
+                                    <span className="text-[var(--app-accent)] font-black text-base">{CURRENCY_SYMBOL}{finalTotal.toFixed(2)}</span>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <Button onClick={handleSubmit} isLoading={loading} className="w-full py-4 rounded-xl text-sm font-black uppercase tracking-widest shadow-lg shadow-red-900/20" disabled={!selectedService || !link || !quantity}>
+                    <Button onClick={handleSubmit} isLoading={loading} className="w-full py-4 rounded-xl text-sm font-black uppercase tracking-widest shadow-lg shadow-[var(--app-accent)]/15" disabled={!selectedService || !link || !quantity}>
                         Place Order
                     </Button>
                 </div>
@@ -318,7 +331,7 @@ const OrdersSection = () => {
                         <button 
                             key={s} 
                             onClick={() => setFilter(s)} 
-                            className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap border transition-all ${filter === s ? 'bg-red-600 text-white border-red-600' : 'bg-[#1a1a1a] text-gray-400 border-neutral-800'}`}
+                            className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap border transition-all ${filter === s ? 'bg-[var(--app-accent)] text-white border-[var(--app-accent)] shadow-[0_4px_12px_rgba(34,197,94,0.3)]' : 'bg-[var(--app-input-bg)] text-[var(--app-text-muted)] border-[var(--app-border)] hover:border-[var(--app-accent)]/30'}`}
                         >
                             {s}
                         </button>
@@ -326,23 +339,23 @@ const OrdersSection = () => {
                 </div>
                 <div className="relative">
                     <input 
-                        className="w-full bg-[#1a1a1a] border border-neutral-800 rounded-xl px-4 py-3 text-sm text-white focus:border-red-600 outline-none"
+                        className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl px-4 py-3 text-sm text-[var(--app-text)] focus:border-[var(--app-accent)] outline-none"
                         placeholder="Search orders..."
                         value={searchTerm}
                         onChange={e => setSearchTerm(e.target.value)}
                     />
-                    <Search size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500"/>
+                    <Search size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-[var(--app-text-muted)]"/>
                 </div>
             </div>
 
             {/* Mobile Cards Layout */}
             <div className="grid gap-4 md:hidden">
                 {userOrders.map(order => (
-                    <div key={order.id} className="bg-[#111] border border-neutral-800 rounded-2xl p-5 relative overflow-hidden">
+                    <div key={order.id} className="bg-[var(--app-card-bg)] border border-[var(--app-border)] rounded-2xl p-5 relative overflow-hidden shadow-sm">
                         <div className="flex justify-between items-start mb-3">
                             <div className="flex items-center gap-2">
-                                <div className="bg-neutral-800 p-2 rounded-lg text-white font-mono text-xs">{order.id}</div>
-                                <a href={order.link} target="_blank" rel="noreferrer" className="text-blue-400 text-xs truncate max-w-[120px] flex items-center gap-1">
+                                <div className="bg-[var(--app-bg)] border border-[var(--app-border)] px-2.5 py-1.5 rounded-lg text-[var(--app-text)] font-mono text-xs font-semibold">{order.id}</div>
+                                <a href={order.link} target="_blank" rel="noreferrer" className="text-blue-500 text-xs truncate max-w-[120px] flex items-center gap-1 font-bold">
                                     <ExternalLink size={10}/> Link
                                 </a>
                             </div>
@@ -351,36 +364,36 @@ const OrdersSection = () => {
                             </span>
                         </div>
                         
-                        <h4 className="text-white font-bold text-sm mb-4 line-clamp-2">{order.serviceName}</h4>
+                        <h4 className="text-[var(--app-text)] font-extrabold text-sm mb-4 line-clamp-2">{order.serviceName}</h4>
                         
-                        <div className="grid grid-cols-3 gap-2 bg-[#0a0a0a] rounded-xl p-3 border border-neutral-800/50 mb-3">
-                            <div className="text-center border-r border-neutral-800">
-                                <p className="text-[10px] text-gray-500 uppercase">Start</p>
-                                <p className="text-white font-mono text-xs">{order.start_count}</p>
+                        <div className="grid grid-cols-3 gap-2 bg-[var(--app-bg)] rounded-xl p-3 border border-[var(--app-border)]/50 mb-3">
+                            <div className="text-center border-r border-[var(--app-border)]">
+                                <p className="text-[10px] text-[var(--app-text-muted)] font-bold uppercase">Start</p>
+                                <p className="text-[var(--app-text)] font-mono text-xs font-semibold">{order.start_count}</p>
                             </div>
-                            <div className="text-center border-r border-neutral-800">
-                                <p className="text-[10px] text-gray-500 uppercase">Remains</p>
-                                <p className="text-white font-mono text-xs">{order.remains || '-'}</p>
+                            <div className="text-center border-r border-[var(--app-border)]">
+                                <p className="text-[10px] text-[var(--app-text-muted)] font-bold uppercase">Remains</p>
+                                <p className="text-[var(--app-text)] font-mono text-xs font-semibold">{order.remains || '-'}</p>
                             </div>
                             <div className="text-center">
-                                <p className="text-[10px] text-gray-500 uppercase">Qty</p>
-                                <p className="text-white font-mono text-xs">{order.quantity}</p>
+                                <p className="text-[10px] text-[var(--app-text-muted)] font-bold uppercase">Qty</p>
+                                <p className="text-[var(--app-text)] font-mono text-xs font-semibold">{order.quantity}</p>
                             </div>
                         </div>
 
                         <div className="flex justify-between items-center">
-                            <span className="text-xs text-gray-500">{new Date(order.date).toLocaleString()}</span>
-                            <span className="text-lg font-black text-white">{CURRENCY_SYMBOL}{order.charge}</span>
+                            <span className="text-xs text-[var(--app-text-muted)] font-medium">{new Date(order.date).toLocaleString()}</span>
+                            <span className="text-lg font-black text-[var(--app-text)]">{CURRENCY_SYMBOL}{order.charge}</span>
                         </div>
                     </div>
                 ))}
-                {userOrders.length === 0 && <div className="text-center text-gray-500 py-10">No orders found.</div>}
+                {userOrders.length === 0 && <div className="text-center text-[var(--app-text-muted)] py-10">No orders found.</div>}
             </div>
 
             {/* Desktop Table Layout */}
-            <div className="hidden md:block overflow-x-auto bg-[#111] border border-neutral-800 rounded-xl">
+            <div className="hidden md:block overflow-x-auto bg-[var(--app-card-bg)] border border-[var(--app-border)] rounded-2xl shadow-sm">
                 <table className="w-full text-left text-sm whitespace-nowrap">
-                    <thead className="bg-[#0a0a0a] text-gray-500 uppercase text-[10px] font-bold border-b border-neutral-800">
+                    <thead className="bg-[var(--app-sidebar-bg)] border-b border-[var(--app-border)] text-[var(--app-text-muted)] uppercase text-[10px] font-black tracking-wider">
                         <tr>
                             <th className="px-6 py-4">ID</th>
                             <th className="px-6 py-4">Service</th>
@@ -390,14 +403,14 @@ const OrdersSection = () => {
                             <th className="px-6 py-4">Status</th>
                         </tr>
                     </thead>
-                    <tbody className="divide-y divide-neutral-800">
+                    <tbody className="divide-y divide-[var(--app-border)]">
                         {userOrders.map(order => (
-                            <tr key={order.id} className="hover:bg-white/5 transition-colors">
-                                <td className="px-6 py-4 font-mono text-xs text-gray-400">{order.id}</td>
+                            <tr key={order.id} className="hover:bg-[var(--app-accent)]/5 transition-colors">
+                                <td className="px-6 py-4 font-mono text-xs text-[var(--app-text-muted)]">{order.id}</td>
                                 <td className="px-6 py-4 max-w-[250px] truncate" title={order.serviceName}>{order.serviceName}</td>
-                                <td className="px-6 py-4 max-w-[150px] truncate text-blue-400"><a href={order.link} target="_blank" rel="noreferrer" className="hover:underline">{order.link}</a></td>
-                                <td className="px-6 py-4 font-bold text-white">{CURRENCY_SYMBOL}{order.charge}</td>
-                                <td className="px-6 py-4">{order.quantity}</td>
+                                <td className="px-6 py-4 max-w-[150px] truncate text-blue-500 font-medium"><a href={order.link} target="_blank" rel="noreferrer" className="hover:underline">{order.link}</a></td>
+                                <td className="px-6 py-4 font-black text-[var(--app-text)]">{CURRENCY_SYMBOL}{order.charge}</td>
+                                <td className="px-6 py-4 font-medium">{order.quantity}</td>
                                 <td className="px-6 py-4">
                                     <span className={`px-2 py-1 rounded text-[10px] font-bold border uppercase ${statusColors[order.status]}`}>
                                         {order.status}
@@ -450,7 +463,7 @@ const AddFundsSection = () => {
                     // RAZORPAY FIX: Correctly use the user's mobile number from their profile.
                     contact: user.mobile || undefined 
                 }, 
-                theme: { color: "#DC2626" }, 
+                theme: { color: "#22c55e" }, 
                 modal: { ondismiss: function() { setLoading(false); } } 
             };
             if (order.id) { options.order_id = order.id; }
@@ -460,7 +473,7 @@ const AddFundsSection = () => {
         } catch (e: any) { setNotification({ msg: e.message, type: 'error' }); setLoading(false); }
     };
 
-    return (<div className="max-w-xl mx-auto space-y-8 animate-in slide-in-from-bottom-4 duration-500 px-1 md:px-0">{notification && <Notification message={notification.msg} type={notification.type} onClose={() => setNotification(null)} />}<div className="text-center"><h2 className="text-2xl md:text-3xl font-black italic tracking-tighter text-white">ADD <span className="text-red-600 neon-text">FUNDS</span></h2><p className="text-gray-400 text-xs md:text-sm mt-2">Instant deposit via Razorpay (UPI, Cards, Netbanking).</p></div><Card className="border-t-4 border-t-red-600 p-4 md:p-6"><div className="space-y-6"><div className="bg-red-900/10 p-4 rounded-lg border border-red-900/30 flex items-start gap-3"><ShieldCheck className="text-red-500 shrink-0 mt-1" /><div className="text-sm text-gray-300"><p className="font-bold text-white mb-1">Secure Payment Gateway</p><p>Your payment is processed securely by Razorpay. Funds are added instantly after success.</p></div></div><Input label="Amount (INR)" type="number" placeholder="e.g. 500" value={amount} onChange={e => setAmount(e.target.value)} /><Button onClick={handleRazorpayPayment} isLoading={loading} className="w-full neon-box" size="lg">Add Funds</Button><div className="flex justify-center gap-4 opacity-50 grayscale hover:grayscale-0 transition-all"><div className="text-[10px] md:text-xs text-gray-500 text-center">Supported: UPI (GPay/PhonePe), Credit/Debit Cards, Netbanking</div></div></div></Card><div className="pt-8 border-t border-white/5"><h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2"><Clock size={18} className="text-red-500"/> Transaction History</h3><div className="bg-neutral-900/50 border border-neutral-800 rounded-xl overflow-hidden">{userTransactions.length > 0 ? (<table className="w-full text-left text-xs"><thead className="bg-black/50 text-gray-500 uppercase font-bold"><tr><th className="px-4 py-3">Date</th><th className="px-4 py-3">ID</th><th className="px-4 py-3">Amount</th><th className="px-4 py-3 text-right">Status</th></tr></thead><tbody className="divide-y divide-neutral-800">{userTransactions.map(t => (<tr key={t.id} className="hover:bg-white/5 transition-colors"><td className="px-4 py-3 text-gray-400">{new Date(t.date).toLocaleDateString()}</td><td className="px-4 py-3 font-mono text-gray-500">{t.paymentId || t.id.substring(0,8)}</td><td className={`px-4 py-3 font-bold ${t.type === 'DEPOSIT' || t.type === 'REFUND' || t.type === 'REFERRAL_PAYOUT' || t.type === 'REFERRAL_COMMISSION' ? 'text-green-400' : 'text-red-400'}`}>{t.type === 'DEPOSIT' || t.type === 'REFUND' || t.type === 'REFERRAL_PAYOUT' || t.type === 'REFERRAL_COMMISSION' ? '+' : '-'}{CURRENCY_SYMBOL}{t.amount}</td><td className="px-4 py-3 text-right"><Badge variant={t.status === 'SUCCESS' ? 'success' : t.status === 'FAILED' ? 'danger' : 'warning'}>{t.status}</Badge></td></tr>))}</tbody></table>) : (<div className="p-8 text-center text-gray-500 text-sm">No transactions found yet.</div>)}{userTransactions.length > 0 && <div className="p-2 text-center text-[10px] text-gray-600 bg-black/20">Showing last 10 transactions</div>}</div></div></div>);
+    return (<div className="max-w-xl mx-auto space-y-8 animate-in slide-in-from-bottom-4 duration-500 px-1 md:px-0">{notification && <Notification message={notification.msg} type={notification.type} onClose={() => setNotification(null)} />}<div className="text-center"><h2 className="text-2xl md:text-3xl font-black italic tracking-tighter text-[var(--app-text)]">ADD <span className="text-[var(--app-accent)]">FUNDS</span></h2><p className="text-[var(--app-text-muted)] text-xs md:text-sm mt-2">Instant deposit via Razorpay (UPI, Cards, Netbanking).</p></div><Card className="border-t-4 border-t-[var(--app-accent)] p-4 md:p-6"><div className="space-y-6"><div className="bg-[var(--app-accent)]/10 p-4 rounded-lg border border-[var(--app-accent)]/20 flex items-start gap-3"><ShieldCheck className="text-[var(--app-accent)] shrink-0 mt-1" /><div className="text-sm text-[var(--app-text-muted)]"><p className="font-bold text-[var(--app-text)] mb-1">Secure Payment Gateway</p><p>Your payment is processed securely by Razorpay. Funds are added instantly after success.</p></div></div><Input label="Amount (INR)" type="number" placeholder="e.g. 500" value={amount} onChange={e => setAmount(e.target.value)} /><Button onClick={handleRazorpayPayment} isLoading={loading} className="w-full neon-box bg-[var(--app-accent)] text-white hover:opacity-95" size="lg">Add Funds</Button><div className="flex justify-center gap-4 opacity-50 grayscale hover:grayscale-0 transition-all"><div className="text-[10px] md:text-xs text-[var(--app-text-muted)] text-center">Supported: UPI (GPay/PhonePe), Credit/Debit Cards, Netbanking</div></div></div></Card><div className="pt-8 border-t border-[var(--app-border)]"><h3 className="text-lg font-bold text-[var(--app-text)] mb-4 flex items-center gap-2"><Clock size={18} className="text-[var(--app-accent)]"/> Transaction History</h3><div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] rounded-xl overflow-hidden">{userTransactions.length > 0 ? (<table className="w-full text-left text-xs"><thead className="bg-[var(--app-bg)] text-[var(--app-text-muted)] uppercase font-bold"><tr><th className="px-4 py-3">Date</th><th className="px-4 py-3">ID</th><th className="px-4 py-3">Amount</th><th className="px-4 py-3 text-right">Status</th></tr></thead><tbody className="divide-y divide-[var(--app-border)]">{userTransactions.map(t => (<tr key={t.id} className="hover:bg-[var(--app-accent)]/5 transition-colors"><td className="px-4 py-3 text-[var(--app-text-muted)]">{new Date(t.date).toLocaleDateString()}</td><td className="px-4 py-3 font-mono text-[var(--app-text-muted)]">{t.paymentId || t.id.substring(0,8)}</td><td className={`px-4 py-3 font-bold ${t.type === 'DEPOSIT' || t.type === 'REFUND' || t.type === 'REFERRAL_PAYOUT' || t.type === 'REFERRAL_COMMISSION' ? 'text-[var(--app-accent)]' : 'text-[var(--app-text-muted)]'}`}>{t.type === 'DEPOSIT' || t.type === 'REFUND' || t.type === 'REFERRAL_PAYOUT' || t.type === 'REFERRAL_COMMISSION' ? '+' : '-'}{CURRENCY_SYMBOL}{t.amount}</td><td className="px-4 py-3 text-right"><Badge variant={t.status === 'SUCCESS' ? 'success' : t.status === 'FAILED' ? 'danger' : 'warning'}>{t.status}</Badge></td></tr>))}</tbody></table>) : (<div className="p-8 text-center text-[var(--app-text-muted)] text-sm">No transactions found yet.</div>)}{userTransactions.length > 0 && <div className="p-2 text-center text-[10px] text-[var(--app-text-muted)] bg-black/10">Showing last 10 transactions</div>}</div></div></div>);
 };
 
 const ProfileSection = () => {
@@ -469,7 +482,7 @@ const ProfileSection = () => {
     const [newPass, setNewPass] = useState('');
     const [notification, setNotification] = useState<{msg: string, type: 'success'|'error'} | null>(null);
     const handlePassUpdate = async () => { try { await updateUserPassword(oldPass, newPass); setNotification({ msg: "Password updated!", type: 'success' }); setOldPass(''); setNewPass(''); } catch (e: any) { setNotification({ msg: e.message, type: 'error' }); } };
-    return (<div className="max-w-2xl mx-auto animate-in slide-in-from-bottom-4 duration-500 px-1 md:px-0">{notification && <Notification message={notification.msg} type={notification.type} onClose={() => setNotification(null)} />}<div className="flex flex-col md:flex-row items-center gap-6 mb-8 text-center md:text-left"><div className="w-20 h-20 bg-neutral-800 rounded-full flex items-center justify-center text-4xl font-bold text-red-500 border-2 border-red-600 shadow-[0_0_20px_rgba(220,38,38,0.3)]">{user?.name.charAt(0).toUpperCase()}</div><div><h2 className="text-2xl font-bold text-white">{user?.name}</h2><p className="text-gray-400 text-sm">{user?.email}</p><div className="flex gap-2 mt-2 justify-center md:justify-start"><Badge variant="info">{user?.role}</Badge><Badge variant={user?.isBanned ? 'danger' : 'success'}>{user?.isBanned ? 'Banned' : 'Active'}</Badge></div></div></div><div className="grid grid-cols-1 md:grid-cols-2 gap-6"><Card className="p-4 md:p-6"><h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2"><Lock size={18} className="text-red-500"/> Security</h3><div className="space-y-4"><Input label="Current Password" type="password" value={oldPass} onChange={e => setOldPass(e.target.value)} /><Input label="New Password" type="password" value={newPass} onChange={e => setNewPass(e.target.value)} /><Button onClick={handlePassUpdate} className="w-full">Update Password</Button></div></Card><Card className="p-4 md:p-6"><h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2"><Wallet size={18} className="text-red-500"/> Account Stats</h3><div className="space-y-4"><div className="flex justify-between p-3 bg-black/40 rounded border border-white/5"><span className="text-gray-400 text-sm">Total Spent</span><span className="font-bold text-white">{CURRENCY_SYMBOL}{(user?.totalSpent || 0).toFixed(2)}</span></div><div className="flex justify-between p-3 bg-black/40 rounded border border-white/5"><span className="text-gray-400 text-sm">Joined</span><span className="font-bold text-white">{new Date(user?.createdAt || '').toLocaleDateString()}</span></div></div></Card></div></div>);
+    return (<div className="max-w-2xl mx-auto animate-in slide-in-from-bottom-4 duration-500 px-1 md:px-0">{notification && <Notification message={notification.msg} type={notification.type} onClose={() => setNotification(null)} />}<div className="flex flex-col md:flex-row items-center gap-6 mb-8 text-center md:text-left"><div className="w-20 h-20 bg-[var(--app-card-bg)] border border-[var(--app-border)] rounded-full flex items-center justify-center text-4xl font-bold text-[var(--app-accent)] shadow-[0_0_20px_rgba(46,189,89,0.2)]">{user?.name.charAt(0).toUpperCase()}</div><div><h2 className="text-2xl font-bold text-[var(--app-text)]">{user?.name}</h2><p className="text-[var(--app-text-muted)] text-sm">{user?.email}</p><div className="flex gap-2 mt-2 justify-center md:justify-start"><Badge variant="info">{user?.role}</Badge><Badge variant={user?.isBanned ? 'danger' : 'success'}>{user?.isBanned ? 'Banned' : 'Active'}</Badge></div></div></div><div className="grid grid-cols-1 md:grid-cols-2 gap-6"><Card className="p-4 md:p-6 bg-[var(--app-card-bg)] border border-[var(--app-border)]"><h3 className="text-lg font-bold text-[var(--app-text)] mb-4 flex items-center gap-2"><Lock size={18} className="text-[var(--app-accent)]"/> Security</h3><div className="space-y-4"><Input label="Current Password" type="password" value={oldPass} onChange={e => setOldPass(e.target.value)} /><Input label="New Password" type="password" value={newPass} onChange={e => setNewPass(e.target.value)} /><Button onClick={handlePassUpdate} className="w-full bg-[var(--app-accent)] hover:opacity-90 text-white">Update Password</Button></div></Card><Card className="p-4 md:p-6 bg-[var(--app-card-bg)] border border-[var(--app-border)]"><h3 className="text-lg font-bold text-[var(--app-text)] mb-4 flex items-center gap-2"><Wallet size={18} className="text-[var(--app-accent)]"/> Account Stats</h3><div className="space-y-4"><div className="flex justify-between p-3 bg-[var(--app-bg)] rounded border border-[var(--app-border)]"><span className="text-[var(--app-text-muted)] text-sm">Total Spent</span><span className="font-bold text-[var(--app-text)]">{CURRENCY_SYMBOL}{(user?.totalSpent || 0).toFixed(2)}</span></div><div className="flex justify-between p-3 bg-[var(--app-bg)] rounded border border-[var(--app-border)]"><span className="text-[var(--app-text-muted)] text-sm">Joined</span><span className="font-bold text-[var(--app-text)]">{new Date(user?.createdAt || '').toLocaleDateString()}</span></div></div></Card></div></div>);
 };
 
 const SupportSection = () => {

@@ -130,7 +130,8 @@ const initialConfig: GlobalConfig = {
     referralSignupBonus: 1.0,
     referralDepositBonus: 5.0, // Default 5%
     referralMinDeposit: 10.0,
-    isReferralSystemEnabled: true
+    isReferralSystemEnabled: true,
+    landingVideoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 };
 
 // --- CACHING SYSTEM ---
@@ -336,6 +337,19 @@ export const updateConfig = async (newConfig: Partial<GlobalConfig>) => {
     try { await supabase.from('settings').upsert({ id: 'global', ...newConfig }); invalidateCache(['suh_cache_config']); } catch (e) { handleSupabaseError(e); }
 };
 
+// Helper to dynamically get Render Backend URL from local cache
+const getRenderBackendUrl = (): string => {
+    try {
+        const cached = getFromCacheSync<GlobalConfig>('suh_cache_config');
+        if (cached && cached.renderBackendUrl) {
+            return cached.renderBackendUrl.trim();
+        }
+    } catch (e) {
+        console.warn("Could not retrieve cached backend URL:", e);
+    }
+    return '';
+};
+
 // --- UPDATED API CALLER USING SECURE BACKEND PROXY ---
 const callSmmApi = async (params: URLSearchParams, retries = 2): Promise<any> => {
     try {
@@ -344,7 +358,10 @@ const callSmmApi = async (params: URLSearchParams, retries = 2): Promise<any> =>
             body[key] = value;
         });
 
-        const response = await fetch("/api/smm", {
+        const backendBase = getRenderBackendUrl();
+        const urlObj = backendBase ? `${backendBase.replace(/\/$/, "")}/api/smm` : "/api/smm";
+
+        const response = await fetch(urlObj, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -667,7 +684,10 @@ export const handleRazorpaySuccess = async (userId: string, amount: number, paym
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) throw new Error("Authentication required for payment verification");
 
-            const response = await fetch("/api/payments/verify", {
+            const backendBase = getRenderBackendUrl();
+            const urlObj = backendBase ? `${backendBase.replace(/\/$/, "")}/api/payments/verify` : "/api/payments/verify";
+
+            const response = await fetch(urlObj, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

@@ -102,6 +102,13 @@ export interface GlobalConfig {
   globalMarginFixed: number;
   maintenanceMode: boolean;
   
+  // Custom Dynamic Theme & Backend URL Configs
+  themeBg?: string;
+  themeDarkBg?: string;
+  themeAccent?: string;
+  renderBackendUrl?: string;
+  landingVideoUrl?: string;
+
   // Referral Config
   referralSignupBonus: number;
   referralDepositBonus: number; // Used as % commission now

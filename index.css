@@ -1,1 +1,77 @@
 @import "tailwindcss";
+
+:root {
+  --app-bg: #ffffff;
+  --app-card-bg: #f9fafb;
+  --app-accent: #22c55e;
+  --app-accent-hover: #16a34a;
+  --app-text: #0f172a;
+  --app-text-muted: #475569;
+  --app-border: #e2e8f0;
+  --app-sidebar-bg: #f1f5f9;
+}
+
+:root.dark {
+  --app-bg: #09090b;
+  --app-card-bg: #18181b;
+  --app-accent: #22c55e;
+  --app-accent-hover: #16a34a;
+  --app-text: #fafafa;
+  --app-text-muted: #a1a1aa;
+  --app-border: #27272a;
+  --app-sidebar-bg: #09090b;
+}
+
+body {
+  background-color: var(--app-bg) !important;
+  color: var(--app-text) !important;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+/* Custom Scroll to top behavior */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Custom layout classes using custom properties */
+.theme-bg {
+  background-color: var(--app-bg) !important;
+}
+.theme-card {
+  background-color: var(--app-card-bg) !important;
+  border-color: var(--app-border) !important;
+}
+.theme-border {
+  border-color: var(--app-border) !important;
+}
+.theme-text {
+  color: var(--app-text) !important;
+}
+.theme-text-muted {
+  color: var(--app-text-muted) !important;
+}
+.theme-accent-bg {
+  background-color: var(--app-accent) !important;
+}
+.theme-accent-text {
+  color: var(--app-accent) !important;
+}
+.theme-accent-border {
+  border-color: var(--app-accent) !important;
+}
+
+/* Scrollbars styling matching light/dark mode */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--app-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--app-border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--app-accent);
+}

@@ -17,7 +17,7 @@ export const SMM_API_URL = "https://safesmmpanel.com/api/v2"; // Real API URL
 
 // Initial fallback services (used if API fails or DB empty)
 export const INITIAL_SERVICES: Service[] = [
-  { service: "101", category: "Instagram Followers", name: "Instagram Followers [Real] [Refill 30 Days]", rate: 45.00, min: 10, max: 50000, type: "Default", isEnabled: true },
+  { service: "101", category: "Instagram Followers", name: "Instagram Followers [Real]", rate: 45.00, min: 10, max: 50000, type: "Default", isEnabled: true },
   { service: "102", category: "Instagram Followers", name: "Instagram Followers [Super Fast] [Non-Drop]", rate: 80.00, min: 50, max: 20000, type: "Default", isEnabled: true },
   { service: "201", category: "Instagram Likes", name: "Instagram Likes [Real Mixed] [Instant]", rate: 8.50, min: 20, max: 10000, type: "Default", isEnabled: true },
   { service: "202", category: "Instagram Likes", name: "Instagram Likes [Indian]", rate: 25.00, min: 10, max: 5000, type: "Default", isEnabled: true },
