@@ -312,6 +312,226 @@ def health_check():
         "smm_endpoint": SMM_API_URL
     })
 
+
+# --- USER PLATFORM SMM API ENDPOINT ---
+@app.route("/api/v2", methods=["POST", "GET"])
+def smm_user_api():
+    """
+    User SMM API endpoint. Allows other users' sites to request services,
+    check balance, place orders (deducting funds), and retrieve order statuses.
+    Supports both standard URL-encoded form posts (default for panel clients) and JSON.
+    """
+    # Grab data from form or json or args as fallback
+    data = {}
+    if request.form:
+        data = request.form.to_dict()
+    elif request.is_json:
+        data = request.get_json(silent=True) or {}
+    
+    # Merge query parameters for maximum client compatibility
+    for k, v in request.args.items():
+        if k not in data:
+            data[k] = v
+
+    api_key = data.get("key")
+    action = data.get("action")
+    
+    if not api_key:
+        return jsonify({"error": "API key is required (param 'key')"}), 200 # SMM clients expect 200 OK with {"error": "..."}
+    if not action:
+        return jsonify({"error": "Action is required (param 'action')"}), 200
+
+    # Retrieve user by API Key
+    user_list = supabase_get("users", {"api_key": f"eq.{api_key}"})
+    if not user_list or len(user_list) == 0:
+        return jsonify({"error": "Invalid API key"}), 200
+
+    user = user_list[0]
+    user_id = user.get("id")
+    
+    if user.get("isBanned"):
+        return jsonify({"error": "Your API account has been suspended"}), 200
+
+    # 1. BALANCE ACTION
+    if action == "balance":
+        return jsonify({
+            "balance": float(user.get("balance", 0)),
+            "currency": "INR"
+        })
+
+    # 2. CATEGORIES ACTION
+    elif action == "categories":
+        categories = supabase_get("categories", {"isEnabled": "eq.true", "order": "sortOrder.asc"}) or []
+        return jsonify(categories)
+
+    # 3. SERVICES ACTION
+    elif action == "services":
+        services = supabase_get("services", {"isEnabled": "eq.true", "order": "sortOrder.asc"}) or []
+        formatted = []
+        for s in services:
+            formatted.append({
+                "service": s.get("service"),
+                "name": s.get("name"),
+                "category": s.get("category"),
+                "rate": float(s.get("rate", 0)),
+                "min": int(s.get("min", 10)),
+                "max": int(s.get("max", 10000)),
+                "description": s.get("description") or ""
+            })
+        return jsonify(formatted)
+
+    # 4. PLACING ORDER ACTION (ADD)
+    elif action == "add":
+        service_id = data.get("service")
+        link = data.get("link")
+        quantity_str = data.get("quantity", "0")
+        
+        if not service_id or not link or not quantity_str:
+            return jsonify({"error": "Missing required fields (service, link, quantity)"}), 200
+            
+        try:
+            quantity = int(quantity_str)
+        except ValueError:
+            return jsonify({"error": "Quantity must be an integer"}), 200
+
+        if quantity <= 0:
+            return jsonify({"error": "Quantity must be positive"}), 200
+
+        # Retrieve selected service from DB
+        srv_list = supabase_get("services", {"service": f"eq.{service_id}"})
+        if not srv_list or len(srv_list) == 0:
+            return jsonify({"error": "Service not found"}), 200
+            
+        service = srv_list[0]
+        if not service.get("isEnabled"):
+            return jsonify({"error": "Service is currently disabled"}), 200
+
+        min_qty = int(service.get("min") or 10)
+        max_qty = int(service.get("max") or 10000)
+        
+        if quantity < min_qty:
+            return jsonify({"error": f"Min quantity is {min_qty}"}), 200
+        if quantity > max_qty:
+            return jsonify({"error": f"Max quantity is {max_qty}"}), 200
+
+        # Fetch global margins for calculation
+        config_data = supabase_get("settings", {"id": "eq.global"})
+        config = config_data[0] if config_data else {}
+
+        # SMM pricing calculations
+        margin_percent = float(service.get("customMarginPercent")) if service.get("customMarginPercent") is not None else float(config.get("globalMarginPercent", 20))
+        margin_fixed = float(service.get("customMarginFixed")) if service.get("customMarginFixed") is not None else float(config.get("globalMarginFixed", 0))
+
+        rate = float(service.get("rate" or 0))
+        if margin_percent:
+            rate += rate * (margin_percent / 100.0)
+        if margin_fixed:
+            rate += margin_fixed
+
+        charge = round((rate * quantity) / 1000.0, 2)
+
+        # Apply custom API discount
+        api_discount = float(config.get("apiDiscountPercent") or 0.0)
+        if api_discount > 0:
+            charge = round(charge * (1.0 - api_discount / 100.0), 2)
+
+        # Safeguard low funds check
+        user_bal = float(user.get("balance" or 0))
+        if user_bal < charge:
+            return jsonify({"error": "Low balance"}), 200
+
+        # Securely deduct client account balances
+        new_bal = round(user_bal - charge, 2)
+        new_spent = round(float(user.get("totalSpent") or 0) + charge, 2)
+        supabase_patch("users", {"id": f"eq.{user_id}"}, {"balance": new_bal, "totalSpent": new_spent})
+
+        # Submit actual order to orders database
+        order_payload = {
+            "userId": user_id,
+            "serviceId": service.get("service"),
+            "serviceName": service.get("name"),
+            "link": link,
+            "quantity": quantity,
+            "charge": charge,
+            "start_count": 0,
+            "status": "Pending",
+            "date": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            "placed_via_api": True,
+            "api_user_id": user_id
+        }
+        
+        # Save order records using standard headers
+        headers = get_supabase_headers()
+        url = f"{SUPABASE_URL}/rest/v1/orders"
+        resp = requests.post(url, headers=headers, json=order_payload, timeout=15)
+        new_order = resp.json() if resp.status_code in [200, 201] else {}
+
+        # Log spending actions in transactions table
+        tx_payload = {
+            "userId": user_id,
+            "amount": charge,
+            "type": "SPEND",
+            "status": "SUCCESS",
+            "method": "API_ORDER",
+            "date": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        }
+        requests.post(f"{SUPABASE_URL}/rest/v1/transactions", headers=headers, json=tx_payload, timeout=15)
+
+        order_id = ""
+        if isinstance(new_order, dict):
+            order_id = new_order.get("id")
+        elif isinstance(new_order, list) and len(new_order) > 0:
+            order_id = new_order[0].get("id")
+
+        if not order_id:
+            # Fallback lookup
+            recent = supabase_get("orders", {"userId": f"eq.{user_id}", "limit": 1, "order": "date.desc"})
+            if recent:
+                order_id = recent[0].get("id")
+
+        return jsonify({"order": order_id})
+
+    # 5. RETRIEVE ORDER STATUS ACTION
+    elif action == "status":
+        order_id = data.get("order")
+        if not order_id:
+            return jsonify({"error": "Order ID is required (param 'order')"}), 200
+
+        ord_list = supabase_get("orders", {"id": f"eq.{order_id}"})
+        if not ord_list or len(ord_list) == 0:
+            return jsonify({"error": "Order not found"}), 200
+
+        order = ord_list[0]
+        if order.get("userId") != user_id:
+            return jsonify({"error": "Access denied to order detail"}), 200
+
+        return jsonify({
+            "status": order.get("status"),
+            "start_count": int(order.get("start_count") or 0),
+            "remains": int(order.get("remains") or 0),
+            "charge": float(order.get("charge") or 0),
+            "currency": "INR"
+        })
+
+    # 6. RETRIEVE ORDER LOG HISTORY LIST
+    elif action == "orders":
+        orders = supabase_get("orders", {"userId": f"eq.{user_id}", "placed_via_api": "eq.true", "limit": 50, "order": "date.desc"}) or []
+        return jsonify({
+            "total_orders_placed": len(orders),
+            "orders": [{
+                "id": o.get("id"),
+                "service_id": o.get("serviceId"),
+                "service_name": o.get("serviceName"),
+                "link": o.get("link"),
+                "charge": float(o.get("charge" or 0)),
+                "quantity": int(o.get("quantity" or 0)),
+                "status": o.get("status"),
+                "date": o.get("date")
+            } for o in orders]
+        })
+
+    return jsonify({"error": "Unsupported API action"}), 200
+
 # --- BOOTSTRAPPING BACKGROUND THREADS ---
 def start_threads():
     threading.Thread(target=forward_pending_orders_loop, daemon=True).start()

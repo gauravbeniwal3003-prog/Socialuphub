@@ -4,7 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { 
   LayoutDashboard, ShoppingCart, Wallet, History, User as UserIcon, 
   HelpCircle, Users, Menu, X, LogOut, ChevronRight, Home, List, Zap, 
-  CreditCard, Globe, MessageCircle, Sun, Moon
+  CreditCard, Globe, MessageCircle, Sun, Moon, Code
 } from 'lucide-react';
 import { useAuth } from '../App';
 import { UserRole } from '../types';
@@ -54,7 +54,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     { icon: <List size={18} />, label: 'Orders', path: '/dashboard/orders' },
     { icon: <CreditCard size={18} />, label: 'Add Funds', path: '/dashboard/add-funds' },
     { icon: <Users size={18} />, label: 'Refer & Earn', path: '/dashboard/referrals' },
-    { icon: <Globe size={18} />, label: 'Services', path: '/dashboard' }, // Placeholder
+    { icon: <Code size={18} />, label: 'API Developer', path: '/dashboard/api' },
     { icon: <MessageCircle size={18} />, label: 'WhatsApp Support', action: () => window.open(CONTACT_WHATSAPP_URL, '_blank') },
     { icon: <LogOut size={18} />, label: 'Logout', action: logout },
   ];
@@ -109,6 +109,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               { icon: <History size={20} />, label: 'Orders', path: '/dashboard/orders' },
               { icon: <Wallet size={20} />, label: 'Add Funds', path: '/dashboard/add-funds' },
               { icon: <Users size={20} />, label: 'Refer & Earn', path: '/dashboard/referrals' },
+              { icon: <Code size={20} />, label: 'API Developer', path: '/dashboard/api' },
               { icon: <UserIcon size={20} />, label: 'Profile', path: '/dashboard/profile' },
               { icon: <HelpCircle size={20} />, label: 'Support', path: '/dashboard/support' },
             ].map((item) => (

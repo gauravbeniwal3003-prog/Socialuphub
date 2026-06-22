@@ -28,6 +28,7 @@ export interface User {
   createdAt: string;
   lastPaymentAt?: string;
   ip?: string;
+  api_key?: string;
   
   // Referral System
   referral_code?: string;

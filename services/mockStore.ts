@@ -1,13 +1,39 @@
 
 /* 
    DATABASE UPDATE REQUIRED:
-   Run the following SQL in your Supabase SQL Editor to enable Premium Services:
+   Run the following SQL in your Supabase SQL Editor to enable API Integration and Premium features:
    
-   alter table services add column "isPremium" boolean default false;
-   alter table services add column "description" text;
+   -- 1. Enable developer API Keys on Users
+   alter table users add column if not exists "api_key" text unique;
+   create index if not exists idx_users_api_key on users("api_key");
+   
+   -- 2. Add API discounts config rate on Settings
+   alter table settings add column if not exists "apiDiscountPercent" numeric default 0;
 
-   Run this to create tables if starting fresh:
-   -- (Existing table creation SQL would go here, omitting for brevity)
+   -- 3. Add API tracing/flag columns on Orders (Declaring api_user_id as TEXT for raw UUID/text cross-compatibility)
+   alter table orders add column if not exists "placed_via_api" boolean default false;
+   alter table orders add column if not exists "api_user_id" text;
+
+   -- 4. Premium Services (Previous setup)
+   alter table services add column if not exists "isPremium" boolean default false;
+   alter table services add column if not exists "description" text;
+
+   -- 5. Strict API Security Constraint Trigger (Prevents changing or regenerating the key once set per account)
+   create or replace function lock_user_api_key()
+   returns trigger as $$
+   begin
+       if old.api_key is not null and new.api_key is not null and old.api_key <> new.api_key then
+           raise exception 'SMM API key is permanently locked and cannot be changed or regenerated for security reasons.';
+       end if;
+       return new;
+   end;
+   $$ language plpgsql;
+
+   drop trigger if exists tr_lock_user_api_key on users;
+   create trigger tr_lock_user_api_key
+   before update on users
+   for each row
+   execute function lock_user_api_key();
 */
 
 import { User, Service, Order, Transaction, Coupon, GlobalConfig, UserRole, OrderStatus, Category, PaymentSession, ReferralReward } from '../types';

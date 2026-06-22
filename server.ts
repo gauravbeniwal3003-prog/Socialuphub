@@ -93,6 +93,7 @@ async function startServer() {
   }));
   
   app.use(express.json({ limit: '10kb' })); // Limit body size to prevent DoS
+  app.use(express.urlencoded({ extended: true, limit: '10kb' })); // Parse URL-encoded bodies (essential for other panels integrating with us)
 
   // --- BOT DETECTION MIDDLEWARE ---
   app.use((req, res, next) => {
@@ -367,6 +368,246 @@ async function startServer() {
       next();
     });
   };
+
+  // --- USER PLATFORM SMM API ENDPOINT ---
+  app.post("/api/v2", orderLimiter, async (req, res) => {
+    // SMM clients default to urlencoded bodies, which Express parses into req.body.
+    // Allow query parameters too as some platforms mix parameter types.
+    const data = { ...req.query, ...req.body };
+    const apiKey = data.key;
+    const action = data.action;
+
+    if (!apiKey) {
+      return res.json({ error: "API key is required" });
+    }
+    if (!action) {
+      return res.json({ error: "Action is required" });
+    }
+
+    try {
+      // Find the user by API Key
+      const { data: user, error: userErr } = await supabaseAdmin
+        .from('users')
+        .select('*')
+        .eq('api_key', apiKey)
+        .single();
+
+      if (userErr || !user) {
+        return res.json({ error: "Invalid API key" });
+      }
+      if (user.isBanned) {
+        return res.json({ error: "Your API account has been suspended" });
+      }
+
+      // 1. BALANCE ACTION
+      if (action === "balance") {
+        return res.json({
+          balance: parseFloat(user.balance || 0),
+          currency: "INR"
+        });
+      }
+
+      // 2. CATEGORIES ACTION
+      else if (action === "categories") {
+        const { data: categories, error: catErr } = await supabaseAdmin
+          .from('categories')
+          .select('*')
+          .eq('isEnabled', true)
+          .order('sortOrder', { ascending: true });
+
+        if (catErr) throw catErr;
+        return res.json(categories || []);
+      }
+
+      // 3. SERVICES ACTION
+      else if (action === "services") {
+        const { data: services, error: srvErr } = await supabaseAdmin
+          .from('services')
+          .select('*')
+          .eq('isEnabled', true)
+          .order('sortOrder', { ascending: true });
+
+        if (srvErr) throw srvErr;
+
+        const formatted = (services || []).map((s: any) => ({
+          service: s.service,
+          name: s.name,
+          category: s.category,
+          rate: parseFloat(s.rate || 0),
+          min: parseInt(s.min || 10),
+          max: parseInt(s.max || 10000),
+          description: s.description || ""
+        }));
+
+        return res.json(formatted);
+      }
+
+      // 4. ADD ORDER ACTION
+      else if (action === "add") {
+        const serviceId = String(data.service || "");
+        const link = String(data.link || "");
+        const qtyVal = parseInt(data.quantity || "0");
+
+        if (!serviceId || !link || qtyVal <= 0) {
+          return res.json({ error: "Missing required fields (service, link, quantity)" });
+        }
+
+        // Fetch service details
+        const { data: service, error: srvErr } = await supabaseAdmin
+          .from('services')
+          .select('*')
+          .eq('service', serviceId)
+          .single();
+
+        if (srvErr || !service) {
+          return res.json({ error: "Service not found" });
+        }
+        if (!service.isEnabled) {
+          return res.json({ error: "Service is currently disabled" });
+        }
+
+        const minQty = parseInt(service.min || 10);
+        const maxQty = parseInt(service.max || 10000);
+
+        if (qtyVal < minQty) {
+          return res.json({ error: `Min quantity is ${minQty}` });
+        }
+        if (qtyVal > maxQty) {
+          return res.json({ error: `Max quantity is ${maxQty}` });
+        }
+
+        // Fetch config to apply margins & custom API discounts
+        const { data: config } = await supabaseAdmin
+          .from('settings')
+          .select('*')
+          .eq('id', 'global')
+          .single();
+
+        const marginPercent = service.customMarginPercent !== undefined && service.customMarginPercent !== null ? parseFloat(service.customMarginPercent) : parseFloat(config?.globalMarginPercent || 0);
+        const marginFixed = service.customMarginFixed !== undefined && service.customMarginFixed !== null ? parseFloat(service.customMarginFixed) : parseFloat(config?.globalMarginFixed || 0);
+
+        let rate = parseFloat(service.rate || 0);
+        if (marginPercent) rate += rate * (marginPercent / 100);
+        if (marginFixed) rate += marginFixed;
+
+        let charge = Math.round(((rate * qtyVal) / 1000 + Number.EPSILON) * 100) / 100;
+
+        // Apply Custom API Discount
+        const apiDiscount = parseFloat(config?.apiDiscountPercent || 0);
+        if (apiDiscount > 0) {
+          charge = Math.round((charge * (1 - apiDiscount / 100) + Number.EPSILON) * 100) / 100;
+        }
+
+        // Check user funds balance
+        if (user.balance < charge) {
+          return res.json({ error: "Low balance" });
+        }
+
+        const newBalance = Math.round((user.balance - charge + Number.EPSILON) * 100) / 100;
+        const newTotalSpent = Math.round(((user.totalSpent || 0) + charge + Number.EPSILON) * 100) / 100;
+
+        // Securely deduct funds
+        await supabaseAdmin
+          .from('users')
+          .update({ balance: newBalance, totalSpent: newTotalSpent })
+          .eq('id', user.id);
+
+        // Place the Order in our database
+        const { data: newOrder, error: orderErr } = await supabaseAdmin
+          .from('orders')
+          .insert({
+            userId: user.id,
+            serviceId: service.service,
+            serviceName: service.name,
+            link: link,
+            quantity: qtyVal,
+            charge: charge,
+            start_count: 0,
+            status: 'Pending',
+            date: new Date().toISOString(),
+            placed_via_api: true,
+            api_user_id: user.id
+          })
+          .select()
+          .single();
+
+        if (orderErr) throw orderErr;
+
+        // Log spending transaction
+        await supabaseAdmin
+          .from('transactions')
+          .insert({
+            userId: user.id,
+            amount: charge,
+            type: 'SPEND',
+            status: 'SUCCESS',
+            method: 'API_ORDER',
+            date: new Date().toISOString()
+          });
+
+        return res.json({ order: newOrder.id });
+      }
+
+      // 5. STATUS CHECK ACTION
+      else if (action === "status") {
+        const orderId = String(data.order || "");
+        if (!orderId) {
+          return res.json({ error: "Order ID is required ('order' parameter)" });
+        }
+
+        const { data: order, error: ordErr } = await supabaseAdmin
+          .from('orders')
+          .select('*')
+          .eq('id', orderId)
+          .single();
+
+        if (ordErr || !order) {
+          return res.json({ error: "Order not found" });
+        }
+        if (order.userId !== user.id) {
+          return res.json({ error: "Access denied to this order" });
+        }
+
+        return res.json({
+          status: order.status,
+          start_count: parseInt(order.start_count || 0),
+          remains: parseInt(order.remains || 0),
+          charge: parseFloat(order.charge || 0),
+          currency: "INR"
+        });
+      }
+
+      // 6. MULTI-ORDER LOGS OR USAGE
+      else if (action === "orders") {
+        const { data: apiOrders } = await supabaseAdmin
+          .from('orders')
+          .select('*')
+          .eq('userId', user.id)
+          .eq('placed_via_api', true)
+          .order('date', { ascending: false })
+          .limit(50);
+
+        return res.json({
+          total_orders_placed: apiOrders?.length || 0,
+          orders: (apiOrders || []).map((o: any) => ({
+            id: o.id,
+            service_id: o.serviceId,
+            service_name: o.serviceName,
+            link: o.link,
+            charge: parseFloat(o.charge || 0),
+            quantity: parseInt(o.quantity || 0),
+            status: o.status,
+            date: o.date
+          }))
+        });
+      }
+
+      return res.json({ error: "Unsupported API action" });
+    } catch (err: any) {
+      console.error("[User API Error]:", err);
+      return res.json({ error: "Internal Server Error", message: err.message });
+    }
+  });
 
   // Secure SMM API Proxy
   const smmSchema = z.object({

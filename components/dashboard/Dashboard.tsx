@@ -8,6 +8,7 @@ import { Service, Order, OrderStatus, GlobalConfig, Category, Transaction } from
 import { CONTACT_WHATSAPP_URL, CURRENCY_SYMBOL, RAZORPAY_KEY_ID, RAZORPAY_MERCHANT_NAME } from '../../constants';
 import { Search, Wallet, RefreshCw, X, MessageCircle, Lock, Edit2, ShieldCheck, ChevronDown, ArrowDownLeft, ShoppingBag, Clock, ExternalLink, TrendingUp, Upload, Check, AlertTriangle, PlayCircle, Instagram, Youtube, Twitter, Facebook, Copy, Zap, Gift, Share2, CheckCircle } from 'lucide-react';
 import { ReferralSection } from './ReferralSection';
+import { ApiDocsSection } from './ApiDocsSection';
 import { Logo } from '../ui/Logo';
 
 const cleanServiceName = (name: string): string => {
@@ -529,6 +530,7 @@ export const Dashboard: React.FC = () => {
             case 'profile': return <ProfileSection />;
             case 'support': return <SupportSection />;
             case 'referrals': return <ReferralSection />;
+            case 'api': return <ApiDocsSection />;
             default: return <NewOrderSection />;
         }
     };

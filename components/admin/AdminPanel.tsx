@@ -96,7 +96,10 @@ import {
   Palette,
   Server,
   PlayCircle,
+  Code,
 } from "lucide-react";
+
+import { ApiManagement } from "./ApiManagement";
 
 // --- STYLES & HELPERS ---
 const CONTROL_BAR_CLASS =
@@ -2157,7 +2160,7 @@ const UserManagement: React.FC<{
   );
 };
 
-// --- MAIN ADMIN PANEL WRAPPER ---
+  // --- MAIN ADMIN PANEL WRAPPER ---
 export const AdminPanel: React.FC = () => {
   const { logout } = useAuth();
   const [activeTab, setActiveTab] = useState<
@@ -2168,6 +2171,7 @@ export const AdminPanel: React.FC = () => {
     | "CATEGORIES"
     | "COUPONS"
     | "SETTINGS"
+    | "API"
   >("DASHBOARD");
   const [notification, setNotification] = useState<{
     msg: string;
@@ -2202,6 +2206,7 @@ export const AdminPanel: React.FC = () => {
     { id: "CATEGORIES", label: "Cats", icon: <FolderPlus size={20} /> },
     { id: "COUPONS", label: "Coupons", icon: <Tag size={20} /> },
     { id: "SETTINGS", label: "Config", icon: <Settings size={20} /> },
+    { id: "API", label: "APIs", icon: <Code size={20} /> },
   ];
 
   const renderContent = () => {
@@ -2220,6 +2225,8 @@ export const AdminPanel: React.FC = () => {
         return <CouponManagement notify={notify} />;
       case "SETTINGS":
         return <SettingsManagement notify={notify} />;
+      case "API":
+        return <ApiManagement notify={notify} />;
       default:
         return <DashboardOverview />;
     }
