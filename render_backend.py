@@ -336,20 +336,20 @@ def smm_user_api():
     action = data.get("action")
     
     if not api_key:
-        return jsonify({"error": "API key is required (param 'key')"}), 200 # SMM clients expect 200 OK with {"error": "..."}
+        return jsonify({"error": "Declined: SMM key parameter is missing (param 'key')"}), 200 # SMM clients expect 200 OK with {"error": "..."}
     if not action:
-        return jsonify({"error": "Action is required (param 'action')"}), 200
+        return jsonify({"error": "Declined: SMM action parameter is missing (param 'action')"}), 200
 
     # Retrieve user by API Key
     user_list = supabase_get("users", {"api_key": f"eq.{api_key}"})
     if not user_list or len(user_list) == 0:
-        return jsonify({"error": "Invalid API key"}), 200
+        return jsonify({"error": "Declined: Invalid API key"}), 200
 
     user = user_list[0]
     user_id = user.get("id")
     
     if user.get("isBanned"):
-        return jsonify({"error": "Your API account has been suspended"}), 200
+        return jsonify({"error": "Declined: Your API user account has been suspended or banned"}), 200
 
     # 1. BALANCE ACTION
     if action == "balance":
@@ -367,6 +367,11 @@ def smm_user_api():
     elif action == "services":
         services = supabase_get("services", {"isEnabled": "eq.true", "order": "sortOrder.asc"}) or []
         categories = supabase_get("categories", {"isEnabled": "eq.true", "order": "sortOrder.asc"}) or []
+        
+        # Only include services from active categories
+        active_cat_names = {cat.get("name") for cat in categories}
+        services = [s for s in services if s.get("category") in active_cat_names]
+        
         cat_order_map = {cat.get("name"): idx for idx, cat in enumerate(categories)}
 
         config_data = supabase_get("settings", {"id": "eq.global"})
@@ -404,6 +409,7 @@ def smm_user_api():
                 "rate": s_rate,
                 "min": min_qty,
                 "max": int(s.get("max") or 10000),
+                "type": s.get("type") or "Default",
                 "description": s.get("description") or ""
             })
 
@@ -427,29 +433,38 @@ def smm_user_api():
 
     # 4. PLACING ORDER ACTION (ADD)
     elif action == "add":
-        service_id = data.get("service")
-        link = data.get("link")
-        quantity_str = data.get("quantity", "0")
+        service_id = str(data.get("service") or "").strip()
+        link = str(data.get("link") or "").strip()
+        quantity_str = str(data.get("quantity") or "0").strip()
         
-        if not service_id or not link or not quantity_str:
-            return jsonify({"error": "Missing required fields (service, link, quantity)"}), 200
+        if not service_id:
+            return jsonify({"error": "Declined: service parameter is missing or empty"}), 200
+        if not link:
+            return jsonify({"error": "Declined: link parameter is missing or empty"}), 200
+        if not quantity_str or quantity_str == "0":
+            return jsonify({"error": "Declined: quantity parameter is missing or empty"}), 200
             
         try:
             quantity = int(quantity_str)
         except ValueError:
-            return jsonify({"error": "Quantity must be an integer"}), 200
+            return jsonify({"error": f"Declined: quantity parameter must be a positive integer (received: {quantity_str})"}), 200
 
         if quantity <= 0:
-            return jsonify({"error": "Quantity must be positive"}), 200
+            return jsonify({"error": "Declined: quantity parameter must be positive"}), 200
 
         # Retrieve selected service from DB
         srv_list = supabase_get("services", {"service": f"eq.{service_id}"})
         if not srv_list or len(srv_list) == 0:
-            return jsonify({"error": "Service not found"}), 200
+            return jsonify({"error": f"Declined: Service ID {service_id} could not be found on this platform"}), 200
             
         service = srv_list[0]
-        if not service.get("isEnabled"):
-            return jsonify({"error": "Service is currently disabled"}), 200
+        
+        # Check if category is enabled
+        cat_name = service.get("category")
+        cat_check = supabase_get("categories", {"name": f"eq.{cat_name}", "isEnabled": "eq.true"})
+        
+        if not service.get("isEnabled") or not cat_check:
+            return jsonify({"error": f"Declined: Service ID {service_id} is currently disabled or its category is inactive on this platform"}), 200
 
         min_qty = int(service.get("min") or 10)
         if 0 <= min_qty <= 99:
@@ -457,9 +472,9 @@ def smm_user_api():
         max_qty = int(service.get("max") or 10000)
         
         if quantity < min_qty:
-            return jsonify({"error": f"Min quantity is {min_qty}"}), 200
+            return jsonify({"error": f"Declined: Provided quantity ({quantity}) is less than the minimum required limit of {min_qty} for this service"}), 200
         if quantity > max_qty:
-            return jsonify({"error": f"Max quantity is {max_qty}"}), 200
+            return jsonify({"error": f"Declined: Provided quantity ({quantity}) exceeds the maximum allowed limit of {max_qty} for this service"}), 200
 
         # Fetch global margins for calculation
         config_data = supabase_get("settings", {"id": "eq.global"})
@@ -488,7 +503,7 @@ def smm_user_api():
         # Safeguard low funds check
         user_bal = float(user.get("balance") or 0.0)
         if user_bal < charge:
-            return jsonify({"error": "not enough balance"}), 200
+            return jsonify({"error": f"Declined: Insufficient funds. Your balance is ₹{user_bal:.2f}, but this order requires ₹{charge:.2f} (Charge per 1k = ₹{api_service_rate:.2f})"}), 200
 
         # Securely deduct client account balances
         new_bal = round(user_bal - charge, 2)
@@ -552,15 +567,15 @@ def smm_user_api():
     elif action == "status":
         order_id = data.get("order")
         if not order_id:
-            return jsonify({"error": "Order ID is required (param 'order')"}), 200
+            return jsonify({"error": "Declined: Order ID is required (param 'order')"}), 200
 
         ord_list = supabase_get("orders", {"id": f"eq.{order_id}"})
         if not ord_list or len(ord_list) == 0:
-            return jsonify({"error": "Order not found"}), 200
+            return jsonify({"error": f"Declined: Order ID {order_id} not found"}), 200
 
         order = ord_list[0]
         if order.get("userId") != user_id:
-            return jsonify({"error": "Access denied to order detail"}), 200
+            return jsonify({"error": "Declined: Access denied to order detail"}), 200
 
         return jsonify({
             "status": order.get("status"),
@@ -587,7 +602,7 @@ def smm_user_api():
             } for o in orders]
         })
 
-    return jsonify({"error": "Unsupported API action"}), 200
+    return jsonify({"error": "Declined: Unsupported API action"}), 200
 
 # --- BOOTSTRAPPING BACKGROUND THREADS ---
 def start_threads():
