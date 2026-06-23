@@ -429,15 +429,49 @@ async function startServer() {
 
         if (srvErr) throw srvErr;
 
-        const formatted = (services || []).map((s: any) => ({
-          service: s.service,
-          name: s.name,
-          category: s.category,
-          rate: parseFloat(s.rate || 0),
-          min: parseInt(s.min || 10),
-          max: parseInt(s.max || 10000),
-          description: s.description || ""
-        }));
+        // Fetch config to apply margins & custom API discounts
+        const { data: config } = await supabaseAdmin
+          .from('settings')
+          .select('*')
+          .eq('id', 'global')
+          .single();
+
+        const globalMarginPercent = parseFloat(config?.globalMarginPercent || 0);
+        const globalMarginFixed = parseFloat(config?.globalMarginFixed || 0);
+        const apiDiscount = parseFloat(config?.apiDiscountPercent || 0);
+
+        const formatted = (services || []).map((s: any) => {
+          // Calculate SMM Final Selling Price
+          const marginPercent = s.customMarginPercent !== undefined && s.customMarginPercent !== null ? parseFloat(s.customMarginPercent) : globalMarginPercent;
+          const marginFixed = s.customMarginFixed !== undefined && s.customMarginFixed !== null ? parseFloat(s.customMarginFixed) : globalMarginFixed;
+
+          let sRate = parseFloat(s.rate || 0);
+          if (marginPercent) sRate += sRate * (marginPercent / 100);
+          if (marginFixed) sRate += marginFixed;
+
+          // Apply Custom API Discount
+          if (apiDiscount > 0) {
+            sRate = Math.round((sRate * (1 - apiDiscount / 100) + Number.EPSILON) * 100) / 100;
+          } else {
+            sRate = Math.round((sRate + Number.EPSILON) * 100) / 100;
+          }
+
+          // Force minimum quantity to 100 if it is between 0 and 99
+          let minQty = parseInt(s.min || 10);
+          if (minQty >= 0 && minQty <= 99) {
+            minQty = 100;
+          }
+
+          return {
+            service: s.service,
+            name: s.name,
+            category: s.category,
+            rate: sRate,
+            min: minQty,
+            max: parseInt(s.max || 10000),
+            description: s.description || ""
+          };
+        });
 
         return res.json(formatted);
       }
@@ -466,7 +500,10 @@ async function startServer() {
           return res.json({ error: "Service is currently disabled" });
         }
 
-        const minQty = parseInt(service.min || 10);
+        let minQty = parseInt(service.min || 10);
+        if (minQty >= 0 && minQty <= 99) {
+          minQty = 100;
+        }
         const maxQty = parseInt(service.max || 10000);
 
         if (qtyVal < minQty) {
@@ -490,13 +527,16 @@ async function startServer() {
         if (marginPercent) rate += rate * (marginPercent / 100);
         if (marginFixed) rate += marginFixed;
 
-        let charge = Math.round(((rate * qtyVal) / 1000 + Number.EPSILON) * 100) / 100;
-
-        // Apply Custom API Discount
+        // Apply Custom API Discount directly on the overall SMM final rate
         const apiDiscount = parseFloat(config?.apiDiscountPercent || 0);
+        let apiServiceRate = rate;
         if (apiDiscount > 0) {
-          charge = Math.round((charge * (1 - apiDiscount / 100) + Number.EPSILON) * 100) / 100;
+          apiServiceRate = Math.round((rate * (1 - apiDiscount / 100) + Number.EPSILON) * 100) / 100;
+        } else {
+          apiServiceRate = Math.round((rate + Number.EPSILON) * 100) / 100;
         }
+
+        const charge = Math.round(((apiServiceRate * qtyVal) / 1000 + Number.EPSILON) * 100) / 100;
 
         // Check user funds balance
         if (user.balance < charge) {

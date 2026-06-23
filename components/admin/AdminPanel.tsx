@@ -363,12 +363,13 @@ const OrderManagement: React.FC<{
                 </td>
                 <td className={TABLE_CELL_CLASS}>
                   <a
-                    href={o.link}
+                    href={o.link ? o.link.split('#comments=')[0] : ''}
                     target="_blank"
                     rel="noreferrer"
                     className="text-blue-400 truncate max-w-[100px] block"
+                    title={o.link ? o.link.split('#comments=')[0] : ''}
                   >
-                    {o.link}
+                    {o.link ? o.link.split('#comments=')[0] : ''}
                   </a>
                 </td>
                 <td className={TABLE_CELL_CLASS}>{o.quantity}</td>

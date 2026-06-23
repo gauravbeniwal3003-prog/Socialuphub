@@ -85,6 +85,7 @@ const NewOrderSection = () => {
     const [selectedServiceId, setSelectedServiceId] = useState(() => sessionStorage.getItem('suh_order_service') || '');
     const [link, setLink] = useState(() => sessionStorage.getItem('suh_order_link') || '');
     const [quantity, setQuantity] = useState(() => sessionStorage.getItem('suh_order_qty') || '');
+    const [comments, setComments] = useState(() => sessionStorage.getItem('suh_order_comments') || '');
     const [coupon, setCoupon] = useState('');
     const [activeFilter, setActiveFilter] = useState('All'); // For Chips
     const [searchTerm, setSearchTerm] = useState(''); // Global Search
@@ -97,6 +98,61 @@ const NewOrderSection = () => {
     useEffect(() => { sessionStorage.setItem('suh_order_service', selectedServiceId); }, [selectedServiceId]);
     useEffect(() => { sessionStorage.setItem('suh_order_link', link); }, [link]);
     useEffect(() => { sessionStorage.setItem('suh_order_qty', quantity); }, [quantity]);
+    useEffect(() => { sessionStorage.setItem('suh_order_comments', comments); }, [comments]);
+
+    const filteredServices = useMemo(() => { if (!selectedCategory) return []; return services.filter(s => s.category === selectedCategory && s.isEnabled); }, [selectedCategory, services]);
+    const selectedService = useMemo(() => services.find(s => s.service === selectedServiceId), [services, selectedServiceId]);
+
+    const getMinQty = (service: Service | undefined): number => {
+        if (!service) return 100;
+        const min = parseInt(String(service.min || '10'));
+        return (min >= 0 && min <= 99) ? 100 : min;
+    };
+
+    const isCustomComment = useMemo(() => {
+        if (!selectedService) return false;
+        const sType = (selectedService.type || '').toLowerCase();
+        const sName = (selectedService.name || '').toLowerCase();
+        return sType.includes('comment') || sName.includes('custom comment') || sName.includes('custom comments');
+    }, [selectedService]);
+
+    // Handle auto quantity calculation for custom comment services
+    useEffect(() => {
+        if (isCustomComment) {
+            const lines = comments.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+            setQuantity(lines.length > 0 ? lines.length.toString() : '');
+        }
+    }, [isCustomComment, comments]);
+
+    // Default Selected Category & Service (3533)
+    useEffect(() => {
+        if (!services || services.length === 0) return;
+        const hasSessionCategory = sessionStorage.getItem('suh_order_category');
+        const hasSessionService = sessionStorage.getItem('suh_order_service');
+
+        const defaultServiceObj = services.find(s => s.service === '3533' && s.isEnabled);
+
+        if (!hasSessionService && defaultServiceObj) {
+            setSelectedServiceId('3533');
+            if (!hasSessionCategory) {
+                setSelectedCategory(defaultServiceObj.category);
+                sessionStorage.setItem('suh_order_category', defaultServiceObj.category);
+            }
+            sessionStorage.setItem('suh_order_service', '3533');
+        } else if (!hasSessionCategory && categories && categories.length > 0) {
+            const targetCategory = categories.find(c => c.isEnabled && c.name.toLowerCase().includes('cheapest in market'));
+            if (targetCategory) {
+                setSelectedCategory(targetCategory.name);
+                sessionStorage.setItem('suh_order_category', targetCategory.name);
+            } else {
+                const firstCat = categories.find(c => c.isEnabled);
+                if (firstCat) {
+                    setSelectedCategory(firstCat.name);
+                    sessionStorage.setItem('suh_order_category', firstCat.name);
+                }
+            }
+        }
+    }, [services, categories]);
 
     const userOrderCount = useMemo(() => orders.filter(o => o.userId === user?.id).length, [orders, user]);
     
@@ -114,9 +170,7 @@ const NewOrderSection = () => {
         return cats.map(c => c.name);
     }, [categories, activeFilter, searchTerm]);
 
-    const filteredServices = useMemo(() => { if (!selectedCategory) return []; return services.filter(s => s.category === selectedCategory && s.isEnabled); }, [selectedCategory, services]);
-    const selectedService = useMemo(() => services.find(s => s.service === selectedServiceId), [services, selectedServiceId]);
-    
+
     const serviceOptions = useMemo(() => {
         let opts = filteredServices.map(s => `${s.service} - ${cleanServiceName(s.name)} - ${CURRENCY_SYMBOL}${calculateFinalPrice(s, config).toFixed(2)}`);
         // Global Search Filter
@@ -133,12 +187,29 @@ const NewOrderSection = () => {
         if (!user || !selectedService) return; 
         setLoading(true); 
         try { 
-            await placeOrder(user.id, selectedService.service, selectedService.name, link, parseInt(quantity), finalTotal, coupon); 
+            const qtyNum = parseInt(quantity || "0");
+            const minQty = getMinQty(selectedService);
+            const maxQty = selectedService.max || 10000;
+
+            if (isCustomComment && !comments.trim()) {
+                throw new Error("Please enter custom comments (1 per line).");
+            }
+            if (qtyNum < minQty) {
+                throw new Error(`Minimum order quantity for this service is ${minQty}.`);
+            }
+            if (qtyNum > maxQty) {
+                throw new Error(`Maximum order quantity for this service is ${maxQty}.`);
+            }
+
+            const finalLink = isCustomComment && comments ? `${link}#comments=${encodeURIComponent(comments)}` : link;
+
+            await placeOrder(user.id, selectedService.service, selectedService.name, finalLink, qtyNum, finalTotal, coupon); 
             setNotification({ msg: "Order placed successfully! It will start shortly.", type: 'success' }); 
             // Clear persistent storage on success
-            setLink(''); setQuantity(''); setCoupon(''); 
+            setLink(''); setQuantity(''); setCoupon(''); setComments('');
             sessionStorage.removeItem('suh_order_link');
             sessionStorage.removeItem('suh_order_qty');
+            sessionStorage.removeItem('suh_order_comments');
         } catch (e: any) { 
             setNotification({ msg: e.message, type: 'error' }); 
         } finally { 
@@ -285,11 +356,36 @@ const NewOrderSection = () => {
                             <input className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl px-4 py-3.5 text-sm text-[var(--app-text)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)]/30 outline-none placeholder-[var(--app-text-muted)]" placeholder="https://..." value={link} onChange={e => setLink(e.target.value)} />
                             <p className="text-[10px] text-[var(--app-text-muted)] mt-1 ml-1 font-medium">Account must be public.</p>
                         </div>
+
+                        {isCustomComment && (
+                            <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                                <label className="text-xs font-bold text-[var(--app-text-muted)] mb-2 block ml-1 uppercase tracking-wider">Custom Comments (1 per line)</label>
+                                <textarea 
+                                    className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl px-4 py-3 text-sm text-[var(--app-text)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)]/30 outline-none placeholder-[var(--app-text-muted)] h-28 resize-none font-sans" 
+                                    placeholder="Enter custom comments, one per line..." 
+                                    value={comments} 
+                                    onChange={e => setComments(e.target.value)} 
+                                />
+                                <p className="text-[10px] text-[var(--app-text-muted)] mt-1 ml-1 font-medium">Comments count: {comments.split('\n').map(l => l.trim()).filter(l => l.length > 0).length}</p>
+                            </div>
+                        )}
+
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <label className="text-xs font-bold text-[var(--app-text-muted)] mb-2 block ml-1 uppercase tracking-wider">Quantity</label>
-                                <input className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl px-4 py-3.5 text-sm text-[var(--app-text)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)]/30 outline-none" type="number" placeholder="1000" value={quantity} onChange={e => setQuantity(e.target.value)} />
-                                {selectedService && <p className="text-[10px] text-[var(--app-text-muted)] mt-1 ml-1 font-medium">Min: {selectedService.min} - Max: {selectedService.max}</p>}
+                                <input 
+                                    className={`w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl px-4 py-3.5 text-sm text-[var(--app-text)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)]/30 outline-none ${isCustomComment ? 'opacity-70 cursor-not-allowed select-none' : ''}`} 
+                                    type="number" 
+                                    placeholder={isCustomComment ? "0" : "1000"} 
+                                    value={quantity} 
+                                    onChange={e => !isCustomComment && setQuantity(e.target.value)} 
+                                    readOnly={isCustomComment}
+                                />
+                                {selectedService && (
+                                    <p className="text-[10px] text-[var(--app-text-muted)] mt-1 ml-1 font-medium">
+                                        Min: {getMinQty(selectedService)} - Max: {selectedService.max}
+                                    </p>
+                                )}
                             </div>
                             <div>
                                 <label className="text-xs font-bold text-[var(--app-text-muted)] mb-2 block ml-1 uppercase tracking-wider">Charge</label>
@@ -365,7 +461,7 @@ const OrdersSection = () => {
                         <div className="flex flex-wrap justify-between items-center gap-2 mb-3 pb-2.5 border-b border-[var(--app-border)]/40">
                             <div className="flex items-center gap-1.5 flex-wrap min-w-0">
                                 <div className="bg-[var(--app-bg)] border border-[var(--app-border)] px-2 py-1 rounded-lg text-[var(--app-text)] font-mono text-[10px] sm:text-xs font-semibold shrink-0">{order.id}</div>
-                                <a href={order.link} target="_blank" rel="noreferrer" className="text-blue-500 text-[11px] truncate max-w-[90px] xs:max-w-[120px] sm:max-w-[180px] flex items-center gap-0.5 font-bold hover:underline py-1">
+                                <a href={order.link ? order.link.split('#comments=')[0] : ''} target="_blank" rel="noreferrer" className="text-blue-500 text-[11px] truncate max-w-[90px] xs:max-w-[120px] sm:max-w-[180px] flex items-center gap-0.5 font-bold hover:underline py-1">
                                     <ExternalLink size={10} className="shrink-0"/> Link
                                 </a>
                             </div>
@@ -418,7 +514,11 @@ const OrdersSection = () => {
                             <tr key={order.id} className="hover:bg-[var(--app-accent)]/5 transition-colors">
                                 <td className="px-6 py-4 font-mono text-xs text-[var(--app-text-muted)]">{order.id}</td>
                                 <td className="px-6 py-4 max-w-[250px] truncate" title={order.serviceName}>{order.serviceName}</td>
-                                <td className="px-6 py-4 max-w-[150px] truncate text-blue-500 font-medium"><a href={order.link} target="_blank" rel="noreferrer" className="hover:underline">{order.link}</a></td>
+                                <td className="px-6 py-4 max-w-[150px] truncate text-blue-500 font-medium">
+                                    <a href={order.link ? order.link.split('#comments=')[0] : ''} target="_blank" rel="noreferrer" className="hover:underline" title={order.link ? order.link.split('#comments=')[0] : ''}>
+                                        {order.link ? order.link.split('#comments=')[0] : ''}
+                                    </a>
+                                </td>
                                 <td className="px-6 py-4 font-black text-[var(--app-text)]">{CURRENCY_SYMBOL}{order.charge}</td>
                                 <td className="px-6 py-4 font-medium">{order.quantity}</td>
                                 <td className="px-6 py-4">

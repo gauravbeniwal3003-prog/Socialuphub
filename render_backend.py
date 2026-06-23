@@ -367,15 +367,41 @@ def smm_user_api():
     # 3. SERVICES ACTION
     elif action == "services":
         services = supabase_get("services", {"isEnabled": "eq.true", "order": "sortOrder.asc"}) or []
+        config_data = supabase_get("settings", {"id": "eq.global"})
+        config = config_data[0] if config_data else {}
+        global_margin_percent = float(config.get("globalMarginPercent") or 0.0)
+        global_margin_fixed = float(config.get("globalMarginFixed") or 0.0)
+        api_discount = float(config.get("apiDiscountPercent") or 0.0)
+
         formatted = []
         for s in services:
+            # Margin Percent and Margin Fixed
+            margin_percent = float(s.get("customMarginPercent")) if s.get("customMarginPercent") is not None else global_margin_percent
+            margin_fixed = float(s.get("customMarginFixed")) if s.get("customMarginFixed") is not None else global_margin_fixed
+
+            s_rate = float(s.get("rate") or 0.0)
+            if margin_percent:
+                s_rate += s_rate * (margin_percent / 100.0)
+            if margin_fixed:
+                s_rate += margin_fixed
+
+            # Discount applied to the overall final SMM Price
+            if api_discount > 0.0:
+                s_rate = round(s_rate * (1.0 - api_discount / 100.0), 2)
+            else:
+                s_rate = round(s_rate, 2)
+
+            min_qty = int(s.get("min") or 10)
+            if 0 <= min_qty <= 99:
+                min_qty = 100
+
             formatted.append({
                 "service": s.get("service"),
                 "name": s.get("name"),
                 "category": s.get("category"),
-                "rate": float(s.get("rate", 0)),
-                "min": int(s.get("min", 10)),
-                "max": int(s.get("max", 10000)),
+                "rate": s_rate,
+                "min": min_qty,
+                "max": int(s.get("max") or 10000),
                 "description": s.get("description") or ""
             })
         return jsonify(formatted)
@@ -407,6 +433,8 @@ def smm_user_api():
             return jsonify({"error": "Service is currently disabled"}), 200
 
         min_qty = int(service.get("min") or 10)
+        if 0 <= min_qty <= 99:
+            min_qty = 100
         max_qty = int(service.get("max") or 10000)
         
         if quantity < min_qty:
@@ -422,18 +450,21 @@ def smm_user_api():
         margin_percent = float(service.get("customMarginPercent")) if service.get("customMarginPercent") is not None else float(config.get("globalMarginPercent", 20))
         margin_fixed = float(service.get("customMarginFixed")) if service.get("customMarginFixed") is not None else float(config.get("globalMarginFixed", 0))
 
-        rate = float(service.get("rate" or 0))
+        rate = float(service.get("rate") or 0.0)
         if margin_percent:
             rate += rate * (margin_percent / 100.0)
         if margin_fixed:
             rate += margin_fixed
 
-        charge = round((rate * quantity) / 1000.0, 2)
-
-        # Apply custom API discount
+        # Apply custom API discount on overall SMM final rate
         api_discount = float(config.get("apiDiscountPercent") or 0.0)
+        api_service_rate = rate
         if api_discount > 0:
-            charge = round(charge * (1.0 - api_discount / 100.0), 2)
+            api_service_rate = round(rate * (1.0 - api_discount / 100.0), 2)
+        else:
+            api_service_rate = round(rate, 2)
+
+        charge = round((api_service_rate * quantity) / 1000.0, 2)
 
         # Safeguard low funds check
         user_bal = float(user.get("balance" or 0))

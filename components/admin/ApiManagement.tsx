@@ -362,13 +362,13 @@ export const ApiManagement: React.FC<ApiManagementProps> = ({ notify }) => {
                         </td>
                         <td className="p-3.5">
                           <a
-                            href={ord.link}
+                            href={ord.link ? ord.link.split('#comments=')[0] : ''}
                             target="_blank"
                             rel="noreferrer"
                             className="text-[var(--app-accent)] hover:underline truncate max-w-[160px] block font-mono text-[10px]"
-                            title={ord.link}
+                            title={ord.link ? ord.link.split('#comments=')[0] : ''}
                           >
-                            {ord.link}
+                            {ord.link ? ord.link.split('#comments=')[0] : ''}
                           </a>
                         </td>
                         <td className="p-3.5 text-center">
