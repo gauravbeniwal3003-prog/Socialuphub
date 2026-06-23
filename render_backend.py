@@ -308,8 +308,7 @@ def health_check():
         "status": "online",
         "message": "pong",
         "service": "SocialUpHub-Autonomous-Python-Backend",
-        "supabase_connection": SUPABASE_URL is not None,
-        "smm_endpoint": SMM_API_URL
+        "supabase_connection": SUPABASE_URL is not None
     })
 
 

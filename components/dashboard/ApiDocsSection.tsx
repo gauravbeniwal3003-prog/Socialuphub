@@ -36,7 +36,7 @@ export const ApiDocsSection: React.FC = () => {
     if (backendBase) {
       return `${backendBase.replace(/\/$/, "")}/api/v2`;
     }
-    return `${window.location.origin}/api/v2`;
+    return `https://socialuphub-backend.onrender.com/api/v2`;
   };
 
   const apiBaseUrl = getActiveApiBaseUrl();
@@ -876,6 +876,39 @@ fetch(url, {
             <p className="text-xs text-[var(--app-text-muted)] leading-relaxed">
               Acceptance Format: Supports clean standard <code className="text-[var(--app-accent)] bg-[var(--app-bg)] border border-[var(--app-border)] px-1.5 py-0.5 rounded font-mono">application/x-www-form-urlencoded</code> POST parameters. Response is always JSON.
             </p>
+          </div>
+        </div>
+
+        {/* Complete Final Request Examples Card */}
+        <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-6 rounded-2xl space-y-4">
+          <h4 className="text-sm font-bold text-[var(--app-text)] flex items-center gap-1.5">
+            <ShieldCheck size={16} className="text-emerald-500" /> Complete Final Request Examples with Your API Key
+          </h4>
+          <p className="text-xs text-[var(--app-text-muted)] leading-relaxed font-sans">
+            Standard scripts (like PerfectPanel, SmartPanel) or simple HTTP clients can consume the endpoints directly. Because SMM endpoints accept both query strings and POST form-encoded data, we provide fully configured, live final URLs below for immediate testing:
+          </p>
+          <div className="space-y-3">
+            <div>
+              <span className="text-[10px] font-bold text-[var(--app-text-muted)] uppercase tracking-wider block mb-1">1. Check Balance Request URL</span>
+              <div className="bg-[var(--app-bg)] border border-[var(--app-border)] rounded-xl p-3 flex justify-between items-center overflow-hidden font-mono text-xs">
+                <span className="text-[var(--app-text)] truncate select-all mr-2">{apiBaseUrl}?key={apiKey || "YOUR_API_KEY"}&action=balance</span>
+                <button onClick={() => copyToClipboard(`${apiBaseUrl}?key=${apiKey || "YOUR_API_KEY"}&action=balance`)} className="text-[var(--app-accent)] hover:underline shrink-0 pl-1 font-bold bg-transparent border-0 outline-none cursor-pointer">Copy</button>
+              </div>
+            </div>
+            <div>
+              <span className="text-[10px] font-bold text-[var(--app-text-muted)] uppercase tracking-wider block mb-1">2. Get Active Services URL</span>
+              <div className="bg-[var(--app-bg)] border border-[var(--app-border)] rounded-xl p-3 flex justify-between items-center overflow-hidden font-mono text-xs">
+                <span className="text-[var(--app-text)] truncate select-all mr-2">{apiBaseUrl}?key={apiKey || "YOUR_API_KEY"}&action=services</span>
+                <button onClick={() => copyToClipboard(`${apiBaseUrl}?key=${apiKey || "YOUR_API_KEY"}&action=services`)} className="text-[var(--app-accent)] hover:underline shrink-0 pl-1 font-bold bg-transparent border-0 outline-none cursor-pointer">Copy</button>
+              </div>
+            </div>
+            <div>
+              <span className="text-[10px] font-bold text-[var(--app-text-muted)] uppercase tracking-wider block mb-1">3. Create Order - URL Parameter Format</span>
+              <div className="bg-[var(--app-bg)] border border-[var(--app-border)] rounded-xl p-3 flex justify-between items-center overflow-hidden font-mono text-xs">
+                <span className="text-[var(--app-text)] truncate select-all mr-2">{apiBaseUrl}?key={apiKey || "YOUR_API_KEY"}&action=add&service=101&link=YOUR_LINK&quantity=100</span>
+                <button onClick={() => copyToClipboard(`${apiBaseUrl}?key=${apiKey || "YOUR_API_KEY"}&action=add&service=101&link=YOUR_LINK&quantity=100`)} className="text-[var(--app-accent)] hover:underline shrink-0 pl-1 font-bold bg-transparent border-0 outline-none cursor-pointer">Copy</button>
+              </div>
+            </div>
           </div>
         </div>
 
