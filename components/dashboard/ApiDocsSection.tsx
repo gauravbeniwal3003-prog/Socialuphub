@@ -31,7 +31,15 @@ export const ApiDocsSection: React.FC = () => {
   const config = useStore('suh_config', getConfig);
   const apiDiscount = (config as any)?.apiDiscountPercent || 0;
 
-  const apiBaseUrl = `${window.location.origin}/api/v2`;
+  const getActiveApiBaseUrl = () => {
+    const backendBase = (config as any)?.renderBackendUrl?.trim();
+    if (backendBase) {
+      return `${backendBase.replace(/\/$/, "")}/api/v2`;
+    }
+    return `${window.location.origin}/api/v2`;
+  };
+
+  const apiBaseUrl = getActiveApiBaseUrl();
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -85,7 +93,7 @@ export const ApiDocsSection: React.FC = () => {
 
     try {
       // Fix: Use standard application/x-www-form-urlencoded to avoid OPTIONS preflight issues and parse correctly
-      const res = await fetch('/api/v2', {
+      const res = await fetch(apiBaseUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'

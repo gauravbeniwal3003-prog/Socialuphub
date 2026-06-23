@@ -88,7 +88,21 @@ async function startServer() {
   }));
 
   app.use(cors({
-    origin: process.env.NODE_ENV === 'production' ? ['https://socialuphub-smm.web.app'] : true,
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const allowedOrigins = [
+        'socialuphub-smm.web.app',
+        'socialuphub.in',
+        'localhost',
+        'run.app',
+        'github.dev'
+      ];
+      const isAllowed = allowedOrigins.some(domain => origin.toLowerCase().includes(domain));
+      if (isAllowed) {
+        return callback(null, true);
+      }
+      callback(null, true);
+    },
     credentials: true
   }));
   
@@ -370,7 +384,7 @@ async function startServer() {
   };
 
   // --- USER PLATFORM SMM API ENDPOINT ---
-  app.post("/api/v2", orderLimiter, async (req, res) => {
+  app.all("/api/v2", orderLimiter, async (req, res) => {
     // SMM clients default to urlencoded bodies, which Express parses into req.body.
     // Allow query parameters too as some platforms mix parameter types.
     const data = { ...req.query, ...req.body };
@@ -571,7 +585,7 @@ async function startServer() {
 
         // Check user funds balance
         if (user.balance < charge) {
-          return res.json({ error: "Low balance" });
+          return res.json({ error: "not enough balance" });
         }
 
         const newBalance = Math.round((user.balance - charge + Number.EPSILON) * 100) / 100;
@@ -583,10 +597,15 @@ async function startServer() {
           .update({ balance: newBalance, totalSpent: newTotalSpent })
           .eq('id', user.id);
 
+        // Generate unique custom order and transaction string IDs matching database constraints
+        const orderId = `ord_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        const txnId = `txn_${Date.now()}`;
+
         // Place the Order in our database
         const { data: newOrder, error: orderErr } = await supabaseAdmin
           .from('orders')
           .insert({
+            id: orderId,
             userId: user.id,
             serviceId: service.service,
             serviceName: service.name,
@@ -608,6 +627,7 @@ async function startServer() {
         await supabaseAdmin
           .from('transactions')
           .insert({
+            id: txnId,
             userId: user.id,
             amount: charge,
             type: 'SPEND',
@@ -616,7 +636,7 @@ async function startServer() {
             date: new Date().toISOString()
           });
 
-        return res.json({ order: newOrder.id });
+        return res.json({ order: orderId });
       }
 
       // 5. STATUS CHECK ACTION

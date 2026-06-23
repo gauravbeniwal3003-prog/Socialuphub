@@ -487,17 +487,26 @@ def smm_user_api():
         charge = round((api_service_rate * quantity) / 1000.0, 2)
 
         # Safeguard low funds check
-        user_bal = float(user.get("balance" or 0))
+        user_bal = float(user.get("balance") or 0.0)
         if user_bal < charge:
-            return jsonify({"error": "Low balance"}), 200
+            return jsonify({"error": "not enough balance"}), 200
 
         # Securely deduct client account balances
         new_bal = round(user_bal - charge, 2)
-        new_spent = round(float(user.get("totalSpent") or 0) + charge, 2)
+        new_spent = round(float(user.get("totalSpent") or 0.0) + charge, 2)
         supabase_patch("users", {"id": f"eq.{user_id}"}, {"balance": new_bal, "totalSpent": new_spent})
+
+        # Generate custom unique ID to satisfy database string primary key constraints
+        import random
+        import string
+        timestamp_ms = int(time.time() * 1000)
+        random_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=5))
+        order_id = f"ord_{timestamp_ms}_{random_suffix}"
+        tx_id = f"txn_{timestamp_ms}"
 
         # Submit actual order to orders database
         order_payload = {
+            "id": order_id,
             "userId": user_id,
             "serviceId": service.get("service"),
             "serviceName": service.get("name"),
@@ -519,6 +528,7 @@ def smm_user_api():
 
         # Log spending actions in transactions table
         tx_payload = {
+            "id": tx_id,
             "userId": user_id,
             "amount": charge,
             "type": "SPEND",
@@ -528,19 +538,16 @@ def smm_user_api():
         }
         requests.post(f"{SUPABASE_URL}/rest/v1/transactions", headers=headers, json=tx_payload, timeout=15)
 
-        order_id = ""
+        ret_order_id = ""
         if isinstance(new_order, dict):
-            order_id = new_order.get("id")
+            ret_order_id = new_order.get("id")
         elif isinstance(new_order, list) and len(new_order) > 0:
-            order_id = new_order[0].get("id")
+            ret_order_id = new_order[0].get("id")
 
-        if not order_id:
-            # Fallback lookup
-            recent = supabase_get("orders", {"userId": f"eq.{user_id}", "limit": 1, "order": "date.desc"})
-            if recent:
-                order_id = recent[0].get("id")
+        if not ret_order_id:
+            ret_order_id = order_id
 
-        return jsonify({"order": order_id})
+        return jsonify({"order": ret_order_id})
 
     # 5. RETRIEVE ORDER STATUS ACTION
     elif action == "status":
