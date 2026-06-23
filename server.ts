@@ -392,10 +392,10 @@ async function startServer() {
     const action = data.action;
 
     if (!apiKey) {
-      return res.json({ error: "API key is required" });
+      return res.json({ error: "Declined: SMM key parameter is missing" });
     }
     if (!action) {
-      return res.json({ error: "Action is required" });
+      return res.json({ error: "Declined: SMM action parameter is missing" });
     }
 
     try {
@@ -410,7 +410,7 @@ async function startServer() {
         return res.json({ error: "Invalid API key" });
       }
       if (user.isBanned) {
-        return res.json({ error: "Your API account has been suspended" });
+        return res.json({ error: "Declined: Your API user account has been suspended or banned" });
       }
 
       // 1. BALANCE ACTION
@@ -443,7 +443,7 @@ async function startServer() {
 
         if (srvErr) throw srvErr;
 
-        // Fetch categories to group services category-wise based on category sort order
+        // Fetch active categories only
         const { data: categories } = await supabaseAdmin
           .from('categories')
           .select('name, sortOrder')
@@ -454,6 +454,9 @@ async function startServer() {
         (categories || []).forEach((cat: any, index: number) => {
           categoryOrderMap.set(cat.name, index);
         });
+
+        // Filter out services belonging to disabled categories
+        const activeServices = (services || []).filter((s: any) => s.category && categoryOrderMap.has(s.category));
 
         // Fetch config to apply margins & custom API discounts
         const { data: config } = await supabaseAdmin
@@ -466,7 +469,7 @@ async function startServer() {
         const globalMarginFixed = parseFloat(config?.globalMarginFixed || 0);
         const apiDiscount = parseFloat(config?.apiDiscountPercent || 0);
 
-        const formatted = (services || []).map((s: any) => {
+        const formatted = activeServices.map((s: any) => {
           // Calculate SMM Final Selling Price
           const marginPercent = s.customMarginPercent !== undefined && s.customMarginPercent !== null ? parseFloat(s.customMarginPercent) : globalMarginPercent;
           const marginFixed = s.customMarginFixed !== undefined && s.customMarginFixed !== null ? parseFloat(s.customMarginFixed) : globalMarginFixed;
@@ -496,6 +499,7 @@ async function startServer() {
             min: minQty,
             max: parseInt(s.max || 10000),
             description: s.description || "",
+            type: s.type || "Default",
             sortOrder: s.sortOrder // preserve temporarily for sorting
           };
         });
@@ -523,12 +527,18 @@ async function startServer() {
 
       // 4. ADD ORDER ACTION
       else if (action === "add") {
-        const serviceId = String(data.service || "");
-        const link = String(data.link || "");
+        const serviceId = String(data.service || "").trim();
+        const link = String(data.link || "").trim();
         const qtyVal = parseInt(data.quantity || "0");
 
-        if (!serviceId || !link || qtyVal <= 0) {
-          return res.json({ error: "Missing required fields (service, link, quantity)" });
+        if (!serviceId) {
+          return res.json({ error: "Declined: service parameter is missing or empty" });
+        }
+        if (!link) {
+          return res.json({ error: "Declined: link parameter is missing or empty" });
+        }
+        if (isNaN(qtyVal) || qtyVal <= 0) {
+          return res.json({ error: `Declined: quantity parameter must be a positive integer (received: ${data.quantity})` });
         }
 
         // Fetch service details
@@ -539,10 +549,18 @@ async function startServer() {
           .single();
 
         if (srvErr || !service) {
-          return res.json({ error: "Service not found" });
+          return res.json({ error: `Declined: Service ID ${serviceId} could not be found on this platform` });
         }
-        if (!service.isEnabled) {
-          return res.json({ error: "Service is currently disabled" });
+
+        // Fetch active categories to check if this service belongs to a disabled category
+        const { data: catCheck } = await supabaseAdmin
+          .from('categories')
+          .select('isEnabled')
+          .eq('name', service.category)
+          .single();
+
+        if (!service.isEnabled || !catCheck || !catCheck.isEnabled) {
+          return res.json({ error: `Declined: Service ID ${serviceId} is currently disabled or its category is inactive on this platform` });
         }
 
         let minQty = parseInt(service.min || 10);
@@ -552,10 +570,10 @@ async function startServer() {
         const maxQty = parseInt(service.max || 10000);
 
         if (qtyVal < minQty) {
-          return res.json({ error: `Min quantity is ${minQty}` });
+          return res.json({ error: `Declined: Provided quantity (${qtyVal}) is less than the minimum required limit of ${minQty} for this service` });
         }
         if (qtyVal > maxQty) {
-          return res.json({ error: `Max quantity is ${maxQty}` });
+          return res.json({ error: `Declined: Provided quantity (${qtyVal}) exceeds the maximum allowed limit of ${maxQty} for this service` });
         }
 
         // Fetch config to apply margins & custom API discounts
@@ -585,7 +603,9 @@ async function startServer() {
 
         // Check user funds balance
         if (user.balance < charge) {
-          return res.json({ error: "not enough balance" });
+          return res.json({ 
+            error: `Declined: Insufficient funds. Your balance is ₹${parseFloat(user.balance).toFixed(2)}, but this order requires ₹${charge.toFixed(2)} (Charge per 1k = ₹${apiServiceRate.toFixed(2)})` 
+          });
         }
 
         const newBalance = Math.round((user.balance - charge + Number.EPSILON) * 100) / 100;
@@ -693,7 +713,7 @@ async function startServer() {
         });
       }
 
-      return res.json({ error: "Unsupported API action" });
+      return res.json({ error: "Declined: Unsupported API action" });
     } catch (err: any) {
       console.error("[User API Error]:", err);
       return res.json({ error: "Internal Server Error", message: err.message });
