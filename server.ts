@@ -429,6 +429,18 @@ async function startServer() {
 
         if (srvErr) throw srvErr;
 
+        // Fetch categories to group services category-wise based on category sort order
+        const { data: categories } = await supabaseAdmin
+          .from('categories')
+          .select('name, sortOrder')
+          .eq('isEnabled', true)
+          .order('sortOrder', { ascending: true });
+
+        const categoryOrderMap = new Map<string, number>();
+        (categories || []).forEach((cat: any, index: number) => {
+          categoryOrderMap.set(cat.name, index);
+        });
+
         // Fetch config to apply margins & custom API discounts
         const { data: config } = await supabaseAdmin
           .from('settings')
@@ -469,8 +481,27 @@ async function startServer() {
             rate: sRate,
             min: minQty,
             max: parseInt(s.max || 10000),
-            description: s.description || ""
+            description: s.description || "",
+            sortOrder: s.sortOrder // preserve temporarily for sorting
           };
+        });
+
+        // Sort formatted services category-wise and then by service sort order internally
+        formatted.sort((a, b) => {
+          const catAOrder = categoryOrderMap.has(a.category) ? categoryOrderMap.get(a.category)! : 9999;
+          const catBOrder = categoryOrderMap.has(b.category) ? categoryOrderMap.get(b.category)! : 9999;
+          if (catAOrder !== catBOrder) {
+            return catAOrder - catBOrder;
+          }
+          const sortA = a.sortOrder || 0;
+          const sortB = b.sortOrder || 0;
+          if (sortA !== sortB) return sortA - sortB;
+          return parseInt(a.service) - parseInt(b.service);
+        });
+
+        // Remove temporary sorting key
+        formatted.forEach((f: any) => {
+          delete f.sortOrder;
         });
 
         return res.json(formatted);

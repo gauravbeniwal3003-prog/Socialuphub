@@ -367,6 +367,9 @@ def smm_user_api():
     # 3. SERVICES ACTION
     elif action == "services":
         services = supabase_get("services", {"isEnabled": "eq.true", "order": "sortOrder.asc"}) or []
+        categories = supabase_get("categories", {"isEnabled": "eq.true", "order": "sortOrder.asc"}) or []
+        cat_order_map = {cat.get("name"): idx for idx, cat in enumerate(categories)}
+
         config_data = supabase_get("settings", {"id": "eq.global"})
         config = config_data[0] if config_data else {}
         global_margin_percent = float(config.get("globalMarginPercent") or 0.0)
@@ -404,6 +407,23 @@ def smm_user_api():
                 "max": int(s.get("max") or 10000),
                 "description": s.get("description") or ""
             })
+
+        # Group and sort category-wise dynamically matching category sort order
+        def get_sort_key(pair):
+            srv_db, srv_f = pair
+            cat_name = srv_f.get("category")
+            cat_order = cat_order_map.get(cat_name, 9999)
+            s_sort_order = float(srv_db.get("sortOrder") or 0.0)
+            try:
+                srv_id = int(srv_f.get("service") or 0)
+            except ValueError:
+                srv_id = 999999
+            return (cat_order, s_sort_order, srv_id)
+
+        zipped = list(zip(services, formatted))
+        zipped.sort(key=get_sort_key)
+        formatted = [p[1] for p in zipped]
+
         return jsonify(formatted)
 
     # 4. PLACING ORDER ACTION (ADD)
