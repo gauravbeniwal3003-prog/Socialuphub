@@ -656,7 +656,10 @@ async function startServer() {
             date: new Date().toISOString()
           });
 
-        return res.json({ order: orderId });
+        return res.json({ 
+          order: orderId, 
+          status: "Order placed successfully" 
+        });
       }
 
       // 5. STATUS CHECK ACTION

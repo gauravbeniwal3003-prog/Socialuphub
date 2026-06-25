@@ -460,7 +460,8 @@ export const ApiDocsSection: React.FC = () => {
         <div>
           <h4>Example Response</h4>
           <pre><code>{
-  "order": "758d4a96-ee50-4889-8d75-ec94589d985a"
+  "order": "758d4a96-ee50-4889-8d75-ec94589d985a",
+  "status": "Order placed successfully"
 }</code></pre>
         </div>
       </div>
@@ -949,7 +950,7 @@ fetch(url, {
                 { name: "quantity", type: "integer", req: true, desc: "Quantity to order." }
               ],
               reqSample: `key=${apiKey || 'your_api_key'}\naction=add\nservice=11\nlink=https://www.instagram.com/profile\nquantity=1000`,
-              resSample: `{\n  "order": "758d4a96-ee50-4889-8d75-ec94589d985a"\n}`
+              resSample: `{\n  "order": "758d4a96-ee50-4889-8d75-ec94589d985a",\n  "status": "Order placed successfully"\n}`
             },
             {
               title: "Get Order Status",

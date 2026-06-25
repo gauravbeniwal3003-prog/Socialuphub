@@ -561,7 +561,10 @@ def smm_user_api():
         if not ret_order_id:
             ret_order_id = order_id
 
-        return jsonify({"order": ret_order_id})
+        return jsonify({
+            "order": ret_order_id,
+            "status": "Order placed successfully"
+        })
 
     # 5. RETRIEVE ORDER STATUS ACTION
     elif action == "status":
