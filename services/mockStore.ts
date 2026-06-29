@@ -1166,11 +1166,21 @@ export const createUserDoc = async (uid: string, email: string, name: string, mo
         if (refUser) referrerId = refUser.id;
     }
 
+    let finalName = name || email.split('@')[0] || "User";
+    try {
+        const { data: nameCheck } = await supabase.from('users').select('id').eq('name', finalName).single();
+        if (nameCheck && nameCheck.id !== uid) {
+            finalName = `${finalName}_${Math.floor(1000 + Math.random() * 9000)}`;
+        }
+    } catch (err) {
+        // Ignore if not found or query error
+    }
+
     const u: User = { 
         id: uid, 
         email, 
-        name: name || email.split('@')[0], 
-        mobile: mobile || '', 
+        name: finalName, 
+        mobile: mobile || undefined, 
         role: UserRole.USER, 
         balance: 0, 
         totalSpent: 0, 

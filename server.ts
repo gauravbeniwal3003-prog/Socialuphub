@@ -864,6 +864,101 @@ async function startServer() {
     }
   });
 
+  // Synchronize/Create User Profile safely bypassing RLS
+  app.post("/api/sync-user", verifyAuth, async (req: any, res: any) => {
+    const { id, email } = req.user;
+    const { name, mobile, referredByCode } = req.body;
+
+    try {
+      // 1. Check if user already exists
+      const { data: existingUser, error: selectErr } = await supabaseAdmin
+        .from('users')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (selectErr) throw selectErr;
+
+      if (existingUser) {
+        const updates: any = { lastLogin: new Date().toISOString() };
+        if (name && !existingUser.name) updates.name = name;
+        if (mobile && !existingUser.mobile) updates.mobile = mobile;
+
+        const { data: updatedUser, error: updateErr } = await supabaseAdmin
+          .from('users')
+          .update(updates)
+          .eq('id', id)
+          .select()
+          .single();
+
+        if (updateErr) throw updateErr;
+        return res.json({ success: true, user: updatedUser });
+      }
+
+      // 2. Generate referral code
+      const referralCode = `U${id.substring(0, 4)}${Math.floor(Math.random() * 99999)}`.toUpperCase();
+      let referredBy = null;
+
+      if (referredByCode) {
+        const { data: refUser } = await supabaseAdmin
+          .from('users')
+          .select('id')
+          .eq('referral_code', referredByCode.toUpperCase())
+          .maybeSingle();
+        if (refUser) {
+          referredBy = refUser.id;
+        }
+      }
+
+      let finalName = name || email?.split('@')[0] || "User";
+      try {
+        const { data: nameCheck } = await supabaseAdmin
+          .from('users')
+          .select('id')
+          .eq('name', finalName)
+          .maybeSingle();
+        if (nameCheck && nameCheck.id !== id) {
+          finalName = `${finalName}_${Math.floor(1000 + Math.random() * 9000)}`;
+        }
+      } catch (err) {
+        // ignore
+      }
+
+      const newUser = {
+        id,
+        email: email || "",
+        name: finalName,
+        mobile: mobile || "",
+        role: "USER",
+        balance: 0,
+        totalSpent: 0,
+        isBanned: false,
+        createdAt: new Date().toISOString(),
+        lastLogin: new Date().toISOString(),
+        referral_code: referralCode,
+        referred_by: referredBy,
+        referral_balance: 0,
+        total_referral_earnings: 0
+      };
+
+      const { data: insertedUser, error: insertErr } = await supabaseAdmin
+        .from('users')
+        .insert(newUser)
+        .select()
+        .single();
+
+      if (insertErr) {
+        console.error("Error inserting user:", insertErr);
+        throw insertErr;
+      }
+
+      return res.json({ success: true, user: insertedUser });
+    } catch (error: any) {
+      console.error("Failed to sync user in backend:", error.message || error);
+      return res.status(500).json({ error: error.message || "Failed to synchronize user profile" });
+    }
+  });
+
   // --- VITE MIDDLEWARE ---
   if (process.env.NODE_ENV !== "production") {
     console.log("Initializing Vite middleware...");

@@ -17,7 +17,7 @@ export interface User {
   id: string;
   email: string;
   name: string;
-  mobile: string; 
+  mobile?: string; 
   role: UserRole;
   balance: number;
   totalSpent: number;

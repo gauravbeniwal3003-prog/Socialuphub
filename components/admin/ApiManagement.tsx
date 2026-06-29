@@ -37,12 +37,14 @@ export const ApiManagement: React.FC<ApiManagementProps> = ({ notify }) => {
 
   // Stats calculation
   const apiUsersList = useMemo(() => {
-    return users.filter(u => u.api_key && u.api_key.trim() !== '');
+    if (!Array.isArray(users)) return [];
+    return users.filter(u => u && u.api_key && u.api_key.trim() !== '');
   }, [users]);
 
   const apiOrdersList = useMemo(() => {
+    if (!Array.isArray(orders)) return [];
     // Filter orders that were placed via API
-    return orders.filter(o => (o as any).placed_via_api === true);
+    return orders.filter(o => o && (o as any).placed_via_api === true);
   }, [orders]);
 
   const totalFundsDeductedByApi = useMemo(() => {
@@ -98,26 +100,37 @@ export const ApiManagement: React.FC<ApiManagementProps> = ({ notify }) => {
 
   // Filter lists
   const filteredApiUsers = useMemo(() => {
+    if (!Array.isArray(apiUsersList)) return [];
     return apiUsersList.filter(u => {
+      if (!u) return false;
       const q = apiUserSearch.toLowerCase();
       return (
-        (u.name && u.name.toLowerCase().includes(q)) ||
-        (u.email && u.email.toLowerCase().includes(q)) ||
-        (u.api_key && u.api_key.toLowerCase().includes(q))
+        (u.name && String(u.name).toLowerCase().includes(q)) ||
+        (u.email && String(u.email).toLowerCase().includes(q)) ||
+        (u.api_key && String(u.api_key).toLowerCase().includes(q))
       );
     });
   }, [apiUsersList, apiUserSearch]);
 
   const filteredApiOrders = useMemo(() => {
+    if (!Array.isArray(apiOrdersList)) return [];
     return apiOrdersList.filter(o => {
+      if (!o) return false;
       const q = apiOrderSearch.toLowerCase();
+      const orderId = String(o.id || '').toLowerCase();
+      const serviceName = String(o.serviceName || '').toLowerCase();
+      const link = String(o.link || '').toLowerCase();
+      const serviceId = String(o.serviceId || '').toLowerCase();
+      
       const matchSearch = (
-        o.id.toLowerCase().includes(q) ||
-        (o.serviceName && o.serviceName.toLowerCase().includes(q)) ||
-        (o.link && o.link.toLowerCase().includes(q)) ||
-        (o.serviceId && String(o.serviceId).toLowerCase().includes(q))
+        orderId.includes(q) ||
+        serviceName.includes(q) ||
+        link.includes(q) ||
+        serviceId.includes(q)
       );
-      const matchFilter = orderStatusFilter === 'ALL' || o.status.toUpperCase() === orderStatusFilter;
+      
+      const orderStatus = String(o.status || '').toUpperCase();
+      const matchFilter = orderStatusFilter === 'ALL' || orderStatus === orderStatusFilter.toUpperCase();
       return matchSearch && matchFilter;
     });
   }, [apiOrdersList, apiOrderSearch, orderStatusFilter]);
@@ -247,7 +260,7 @@ export const ApiManagement: React.FC<ApiManagementProps> = ({ notify }) => {
                         <td className="p-3.5">
                           <div className="flex items-center gap-2 font-mono text-[10px]">
                             <span className="text-gray-400 font-semibold tracking-wider">
-                              {revealedKeys[apiUser.id] ? apiUser.api_key : `${apiUser.api_key?.substring(0, 10)}*********************`}
+                              {revealedKeys[apiUser.id] ? (apiUser.api_key || 'No Key') : (apiUser.api_key ? `${apiUser.api_key.substring(0, 10)}*********************` : 'No Key')}
                             </span>
                             <div className="flex gap-1">
                               <button

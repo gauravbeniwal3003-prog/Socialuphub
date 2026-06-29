@@ -146,19 +146,24 @@ const DashboardOverview: React.FC = () => {
     const now = new Date();
     const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-    const totalRevenue = transactions
-      .filter((t) => t.type === "DEPOSIT" && t.status === "SUCCESS")
-      .reduce((sum, t) => sum + t.amount, 0);
+    const txs = Array.isArray(transactions) ? transactions : [];
+    const usr = Array.isArray(users) ? users : [];
+    const ords = Array.isArray(orders) ? orders : [];
 
-    const todayUsers = users.filter(
-      (u) => new Date(u.createdAt) > oneDayAgo,
+    const totalRevenue = txs
+      .filter((t) => t && t.type === "DEPOSIT" && t.status === "SUCCESS")
+      .reduce((sum, t) => sum + (t.amount || 0), 0);
+
+    const todayUsers = usr.filter(
+      (u) => u && u.createdAt && new Date(u.createdAt) > oneDayAgo,
     ).length;
-    const pendingOrders = orders.filter(
+    const pendingOrders = ords.filter(
       (o) =>
-        o.status === OrderStatus.PENDING || o.status === OrderStatus.PROCESSING,
+        o &&
+        (o.status === OrderStatus.PENDING || o.status === OrderStatus.PROCESSING),
     ).length;
-    const completedOrders = orders.filter(
-      (o) => o.status === OrderStatus.COMPLETED,
+    const completedOrders = ords.filter(
+      (o) => o && o.status === OrderStatus.COMPLETED,
     ).length;
 
     return {
@@ -166,8 +171,8 @@ const DashboardOverview: React.FC = () => {
       todayUsers,
       pendingOrders,
       completedOrders,
-      totalUsers: users.length,
-      totalTxns: transactions.length,
+      totalUsers: usr.length,
+      totalTxns: txs.length,
     };
   }, [users, orders, transactions]);
 
@@ -232,20 +237,35 @@ const OrderManagement: React.FC<{
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
 
   const filteredOrders = useMemo(
-    () =>
-      orders
+    () => {
+      if (!Array.isArray(orders)) return [];
+      return orders
         .filter(
-          (o) =>
-            (filterStatus === "ALL" || o.status === filterStatus) &&
-            (o.id.includes(search) ||
-              o.userId.includes(search) ||
-              o.serviceName.toLowerCase().includes(search.toLowerCase()) ||
-              o.link.toLowerCase().includes(search.toLowerCase()) ||
-              (o.externalId && o.externalId.includes(search))),
+          (o) => {
+            if (!o) return false;
+            const matchesStatus = filterStatus === "ALL" || o.status === filterStatus;
+            if (!matchesStatus) return false;
+
+            const searchLower = search.toLowerCase();
+            const orderId = String(o.id || "").toLowerCase();
+            const userId = String(o.userId || "").toLowerCase();
+            const serviceName = String(o.serviceName || "").toLowerCase();
+            const link = String(o.link || "").toLowerCase();
+            const externalId = String(o.externalId || "").toLowerCase();
+
+            return (
+              orderId.includes(searchLower) ||
+              userId.includes(searchLower) ||
+              serviceName.includes(searchLower) ||
+              link.includes(searchLower) ||
+              externalId.includes(searchLower)
+            );
+          },
         )
         .sort(
-          (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
-        ),
+          (a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime(),
+        );
+    },
     [orders, search, filterStatus],
   );
 
@@ -353,7 +373,7 @@ const OrderManagement: React.FC<{
                 </td>
                 <td className={TABLE_CELL_CLASS}>
                   <div className="font-mono text-gray-400">
-                    {o.userId.substring(0, 8)}...
+                    {(o.userId || "").substring(0, 8)}...
                   </div>
                 </td>
                 <td className={TABLE_CELL_CLASS}>
@@ -1684,13 +1704,25 @@ const UserManagement: React.FC<{
     }
   }, [editingUser]);
 
-  const filteredUsers = users.filter(
-    (u) =>
-      u.name.toLowerCase().includes(search.toLowerCase()) ||
-      u.email.toLowerCase().includes(search.toLowerCase()) ||
-      u.mobile?.includes(search) || // Mobile search
-      u.id.includes(search),
-  );
+  const filteredUsers = useMemo(() => {
+    if (!Array.isArray(users)) return [];
+    return users.filter(
+      (u) => {
+        if (!u) return false;
+        const q = search.toLowerCase();
+        const name = String(u.name || "").toLowerCase();
+        const email = String(u.email || "").toLowerCase();
+        const mobile = String(u.mobile || "");
+        const id = String(u.id || "");
+        return (
+          name.includes(q) ||
+          email.includes(q) ||
+          mobile.includes(search) ||
+          id.includes(search)
+        );
+      }
+    );
+  }, [users, search]);
 
   const handleUpdateUser = async () => {
     if (!editingUser) return;
@@ -1778,7 +1810,7 @@ const UserManagement: React.FC<{
                         {u.name}
                       </div>
                       <div className="text-[var(--app-text-muted)] text-[10px] font-mono">
-                        {u.id.substring(0, 8)}...
+                        {(u.id || "").substring(0, 8)}...
                       </div>
                     </div>
                   </div>

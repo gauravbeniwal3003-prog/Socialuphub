@@ -76,7 +76,7 @@ const DynamicTheme: React.FC<DynamicThemeProps> = () => {
 interface AuthContextType {
   user: User | null;
   login: (identifier: string, pass: string) => Promise<void>;
-  loginWithGoogle: () => Promise<void>;
+  loginWithGoogle: (refCode?: string) => Promise<void>;
   register: (email: string, pass: string, name: string, mobile: string, refCode?: string) => Promise<void>;
   logout: () => void;
 }
@@ -167,49 +167,48 @@ const App: React.FC = () => {
   // Handle Supabase Auth Session
   const handleSession = async (session: any) => {
       if (session?.user) {
-          const { data: userData } = await supabase
-              .from('users')
-              .select('*')
-              .eq('id', session.user.id)
-              .single();
+          try {
+              // Retrieve pending referral code from localStorage
+              const referredByCode = localStorage.getItem('pending_ref_code') || '';
+              const fallbackName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email?.split('@')[0] || "User";
+              const fallbackMobile = session.user.user_metadata?.phone || "";
 
-          if (userData) {
-               const banStatus = checkBanStatus(userData);
-               setUser({ ...userData, id: session.user.id });
-               if (banStatus !== 'ALLOWED') setView('BANNED');
-               else if (view === 'AUTH' || view === 'LANDING') setView('DASHBOARD');
-               
-               const lastLoginKey = `last_login_${session.user.id}`;
-               const lastUpdate = localStorage.getItem(lastLoginKey);
-               if (!lastUpdate || Date.now() - parseInt(lastUpdate) > 1000 * 60 * 60) {
-                   await supabase.from('users').update({ lastLogin: new Date().toISOString() }).eq('id', session.user.id);
-                   localStorage.setItem(lastLoginKey, Date.now().toString());
-               }
+              // Sync user on the backend safely bypassing client-side RLS policies and race conditions
+              const response = await fetch('/api/sync-user', {
+                  method: 'POST',
+                  headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${session.access_token}`
+                  },
+                  body: JSON.stringify({
+                      name: fallbackName,
+                      mobile: fallbackMobile,
+                      referredByCode
+                  })
+              });
 
-          } else {
-               // Fallback: If trigger failed or user doesn't exist yet, try client-side creation
-               console.warn("Syncing Supabase User (Fallback)...");
-               try {
-                  const fallbackName = session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || "User";
-                  const fallbackMobile = session.user.user_metadata?.phone || ""; 
+              if (!response.ok) {
+                  const errData = await response.json().catch(() => ({}));
+                  throw new Error(errData.error || `HTTP ${response.status}`);
+              }
+
+              const data = await response.json();
+              if (data?.user) {
+                  // If successfully synced, remove referral code from localStorage
+                  localStorage.removeItem('pending_ref_code');
                   
-                  await createUserDoc(session.user.id, session.user.email || "", fallbackName, fallbackMobile); 
-                  
-                  // Small delay to ensure DB consistency
-                  await new Promise(r => setTimeout(r, 500)); 
-
-                  // Re-fetch created user to update state correctly
-                   const { data: newUserData } = await supabase.from('users').select('*').eq('id', session.user.id).single();
-                   if (newUserData) {
-                       setUser(newUserData);
-                       setView('DASHBOARD');
-                   }
-               } catch (e: any) {
-                  console.error("Failed to sync user:", e.message || JSON.stringify(e));
-                  await supabase.auth.signOut();
-                  setUser(null);
-                  setView('LANDING');
-               }
+                  const banStatus = checkBanStatus(data.user);
+                  setUser({ ...data.user, id: session.user.id });
+                  if (banStatus !== 'ALLOWED') setView('BANNED');
+                  else if (view === 'AUTH' || view === 'LANDING') setView('DASHBOARD');
+              } else {
+                  throw new Error("No user profile returned from sync API.");
+              }
+          } catch (e: any) {
+              console.error("Failed to sync user via server:", e.message || JSON.stringify(e));
+              await supabase.auth.signOut();
+              setUser(null);
+              setView('LANDING');
           }
       } else {
           setUser(null);
@@ -280,29 +279,39 @@ const App: React.FC = () => {
     if (error) throw new Error(error.message);
   };
 
-  const loginWithGoogle = async () => {
+  const loginWithGoogle = async (refCode?: string) => {
+    if (refCode) {
+      localStorage.setItem('pending_ref_code', refCode);
+    }
+    const inIframe = window.self !== window.top;
+    
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
         redirectTo: window.location.origin,
-        skipBrowserRedirect: true,
+        skipBrowserRedirect: inIframe, // Skip redirect only in iframe to handle popups
       }
     });
     
     if (error) throw new Error(error.message);
     
-    if (data?.url) {
-      // Open in a popup to avoid iframe redirect issues (bad_oauth_state)
+    if (inIframe && data?.url) {
+      // Open in a popup to avoid iframe redirect issues (bad_oauth_state) in the sandbox
       const width = 600;
       const height = 700;
       const left = window.screenX + (window.outerWidth - width) / 2;
       const top = window.screenY + (window.outerHeight - height) / 2;
       
-      window.open(
+      const popup = window.open(
         data.url, 
         'supabase-auth', 
         `width=${width},height=${height},left=${left},top=${top}`
       );
+
+      // If the popup was blocked by a popup blocker, fallback to direct redirect
+      if (!popup) {
+        window.location.assign(data.url);
+      }
     }
   };
 
@@ -332,9 +341,8 @@ const App: React.FC = () => {
         throw new Error("Registration successful, but 'Confirm Email' is enabled in Supabase settings. Please disable it to allow instant login.");
     }
 
-    // Trigger should handle creation, but we call this to ensure client state is consistent
-    if (data.user) {
-        await createUserDoc(data.user.id, email, name, mobile, refCode);
+    if (data.user && refCode) {
+        localStorage.setItem('pending_ref_code', refCode);
     }
   };
 
@@ -363,6 +371,7 @@ const App: React.FC = () => {
             const code = hash.split('?ref=')[1];
             if (code) {
                 setRefCode(code);
+                localStorage.setItem('pending_ref_code', code);
                 setMode('REGISTER');
             }
         }
@@ -428,7 +437,7 @@ const App: React.FC = () => {
             </div>
 
             <button 
-                onClick={loginWithGoogle}
+                onClick={() => loginWithGoogle(refCode)}
                 disabled={loading}
                 className="w-full mt-4 flex items-center justify-center gap-3 bg-white hover:bg-gray-50 border border-gray-200 text-black font-bold py-3.5 rounded-xl transition-all text-sm"
             >
