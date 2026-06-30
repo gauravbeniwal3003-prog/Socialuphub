@@ -928,7 +928,7 @@ async function startServer() {
         id,
         email: email || "",
         name: finalName,
-        mobile: mobile || "",
+        mobile: mobile || null,
         role: "USER",
         balance: 0,
         totalSpent: 0,
