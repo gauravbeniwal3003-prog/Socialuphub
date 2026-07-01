@@ -390,6 +390,23 @@ const App: React.FC = () => {
         const searchParams = new URLSearchParams(cleanSearch);
         const code = searchParams.get('code');
 
+        const errorParam = searchParams.get('error') || params.get('error');
+        const errorDescParam = searchParams.get('error_description') || params.get('error_description');
+
+        if (errorParam) {
+          console.error("OAuth error received in callback message:", errorParam, errorDescParam);
+          setSyncError(`Google Auth Error: ${errorDescParam || errorParam}`);
+          setSyncErrorDetails({
+            message: errorDescParam || errorParam,
+            statusCode: 400,
+            url: '/auth/callback',
+            contentType: 'application/json',
+            responseBody: JSON.stringify({ error: errorParam, error_description: errorDescParam }),
+            hint: "The OAuth authorization server or Supabase returned an error during redirect. This happens if the user cancelled the login, or if the Google API client ID and Client Secret credentials are misconfigured or inactive in Supabase Settings."
+          });
+          return;
+        }
+
         if (accessToken && refreshToken) {
           console.log("Setting session from popup OAuth implicit hash tokens...");
           supabase.auth.setSession({

@@ -1278,10 +1278,18 @@ async function startServer() {
 
   // Synchronize/Create User Profile safely bypassing RLS
   app.post("/api/sync-user", verifyAuth, async (req: any, res: any) => {
-    const { id, email } = req.user;
-    const { name, mobile, referredByCode } = req.body;
-
     try {
+      if (!req.user) {
+        return res.status(401).json({ error: "Unauthorized access: User session details not found." });
+      }
+
+      const { id, email } = req.user;
+      const { name, mobile, referredByCode } = req.body || {};
+
+      if (!id) {
+        return res.status(400).json({ error: "Invalid synchronization request: missing user identifier." });
+      }
+
       // 1. Check if user already exists
       const { data: existingUser, error: selectErr } = await supabaseAdmin
         .from('users')
@@ -1367,14 +1375,21 @@ async function startServer() {
       return res.json({ success: true, user: insertedUser });
     } catch (error: any) {
       console.error("Failed to sync user in backend:", error.message || error);
+      
+      const safeUserId = req.user?.id || "unknown";
+      const safeUserEmail = req.user?.email || "unknown";
+      const safeName = req.body?.name || "unknown";
+      const safeMobile = req.body?.mobile || "unknown";
+      const safeReferredByCode = req.body?.referredByCode || "unknown";
+
       try {
         const errorLog = {
           timestamp: new Date().toISOString(),
-          userId: id,
-          userEmail: email,
-          inputName: name,
-          inputMobile: mobile,
-          referredByCode: referredByCode,
+          userId: safeUserId,
+          userEmail: safeUserEmail,
+          inputName: safeName,
+          inputMobile: safeMobile,
+          referredByCode: safeReferredByCode,
           errorMessage: error.message || String(error),
           errorDetails: error.details || null,
           errorHint: error.hint || null,
@@ -1390,6 +1405,16 @@ async function startServer() {
       }
       return res.status(500).json({ error: error.message || "Failed to synchronize user profile" });
     }
+  });
+
+  // Global Error Handler for API routes to guarantee JSON responses (never HTML)
+  app.use("/api", (err: any, req: any, res: any, next: any) => {
+    console.error("[Global API Error Handler] Caught error:", err);
+    res.status(err.status || 500).json({
+      error: err.message || "An unexpected server error occurred",
+      details: err.details || null,
+      hint: "Guaranteed JSON api safety fallback"
+    });
   });
 
   // --- VITE MIDDLEWARE ---
