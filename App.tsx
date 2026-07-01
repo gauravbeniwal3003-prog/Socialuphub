@@ -97,6 +97,7 @@ const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncErrorDetails, setSyncErrorDetails] = useState<SyncErrorDetails | null>(null);
+  const [blockedOAuthUrl, setBlockedOAuthUrl] = useState<string | null>(null);
   const [view, setView] = useState<'LANDING' | 'DASHBOARD' | 'AUTH' | 'BANNED' | 'MAINTENANCE'>('LANDING');
   const [authLoading, setAuthLoading] = useState(true);
   const [banTimeRemaining, setBanTimeRemaining] = useState<string>('');
@@ -467,6 +468,70 @@ const App: React.FC = () => {
     };
     window.addEventListener('message', handleMessage);
 
+    // Polling backup for sandboxed window.opener null issues
+    const syncInterval = setInterval(async () => {
+      const projectRef = "igkrcgcrvnocauccebrf";
+      const tokenKey = `sb-${projectRef}-auth-token`;
+      const localSessionRaw = localStorage.getItem(tokenKey);
+      const oauthTrigger = localStorage.getItem('oauth_sync_trigger');
+      const oauthErrorTrigger = localStorage.getItem('oauth_error_trigger');
+      
+      if (oauthErrorTrigger) {
+        localStorage.removeItem('oauth_error_trigger');
+        console.error("[Auth Sync] Detected OAuth error via localStorage trigger:", oauthErrorTrigger);
+        setSyncError(`Google Auth Error: ${oauthErrorTrigger}`);
+        setSyncErrorDetails({
+          message: oauthErrorTrigger,
+          statusCode: 400,
+          url: '/auth/callback',
+          contentType: 'application/json',
+          hint: "The OAuth authorization server or Supabase returned an error during redirect. This happens if the user cancelled the login, or if the Google API client ID and Client Secret credentials are misconfigured or inactive in Supabase Settings."
+        });
+        return;
+      }
+
+      if (localSessionRaw && oauthTrigger) {
+        localStorage.removeItem('oauth_sync_trigger'); // Consume trigger
+        console.log("[Auth Sync] Detected session written to localStorage by popup!");
+        try {
+          const parsed = JSON.parse(localSessionRaw);
+          if (parsed?.currentSession) {
+            const { data: { session }, error } = await supabase.auth.setSession({
+              access_token: parsed.currentSession.access_token,
+              refresh_token: parsed.currentSession.refresh_token
+            });
+            if (error) {
+              console.error("[Auth Sync] Failed to set session from localStorage polling:", error.message);
+              setSyncError(error.message);
+            } else if (session) {
+              handleSession(session);
+            }
+          }
+        } catch (err: any) {
+          console.error("[Auth Sync] Failed to recover session from dynamic polling:", err);
+          setSyncError(err.message || "Failed to parse session from secure callback store.");
+        }
+      }
+
+      const oauthCodeTrigger = localStorage.getItem('oauth_code_trigger');
+      if (oauthCodeTrigger) {
+        localStorage.removeItem('oauth_code_trigger'); // Consume trigger
+        console.log("[Auth Sync] Detected authorization code written to localStorage by popup!");
+        try {
+          const { data: { session }, error } = await supabase.auth.exchangeCodeForSession(oauthCodeTrigger);
+          if (error) {
+            console.error("[Auth Sync] Failed to exchange code from localStorage polling:", error.message);
+            setSyncError(error.message);
+          } else if (session) {
+            handleSession(session);
+          }
+        } catch (err: any) {
+          console.error("[Auth Sync] Failed to exchange code from dynamic polling:", err);
+          setSyncError(err.message || "Failed to redeem authorization code.");
+        }
+      }
+    }, 500);
+
     // 3. Initial session check and code/token exchange on startup
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get('code');
@@ -518,6 +583,7 @@ const App: React.FC = () => {
     });
 
     return () => {
+      clearInterval(syncInterval);
       subscription.unsubscribe();
       window.removeEventListener('message', handleMessage);
     };
@@ -540,6 +606,7 @@ const App: React.FC = () => {
   const loginWithGoogle = async (refCode?: string) => {
     setSyncError(null);
     setSyncErrorDetails(null);
+    setBlockedOAuthUrl(null);
     if (refCode) {
       localStorage.setItem('pending_ref_code', refCode);
     }
@@ -569,9 +636,10 @@ const App: React.FC = () => {
         `width=${width},height=${height},left=${left},top=${top}`
       );
 
-      // If the popup was blocked by a popup blocker, fallback to direct redirect
+      // If the popup was blocked by a popup blocker, set state so we can show user-clickable fallback UI
       if (!popup) {
-        window.location.assign(data.url);
+        console.warn("Popup blocked by browser. Exposing secure URL for direct click handler.");
+        setBlockedOAuthUrl(data.url);
       }
     }
   };
@@ -743,12 +811,12 @@ const App: React.FC = () => {
             </div>
 
             <button 
-                onClick={() => loginWithGoogle(refCode)}
+                onClick={() => blockedOAuthUrl ? (() => { const w = window.open(blockedOAuthUrl, 'supabase-auth', 'width=600,height=700'); if (w) setBlockedOAuthUrl(null); })() : loginWithGoogle(refCode)}
                 disabled={loading}
-                className="w-full mt-4 flex items-center justify-center gap-3 bg-white hover:bg-gray-50 border border-gray-200 text-black font-bold py-3.5 rounded-xl transition-all text-sm"
+                className={`w-full mt-4 flex items-center justify-center gap-3 border font-bold py-3.5 rounded-xl transition-all text-sm ${blockedOAuthUrl ? "bg-amber-500/10 border-amber-500/30 text-amber-500 animate-pulse" : "bg-white hover:bg-gray-50 border-gray-200 text-black"}`}
             >
                 <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5" referrerPolicy="no-referrer" />
-                Google
+                {blockedOAuthUrl ? "⚠️ Pop-up Blocked - Click to Authorize" : "Google"}
             </button>
 
             <p className="text-center mt-6 text-[var(--app-text-muted)] hover:text-[var(--app-text)] text-sm cursor-pointer font-medium transition-colors" onClick={() => setMode(mode === 'LOGIN' ? 'REGISTER' : 'LOGIN')}>{mode === 'LOGIN' ? "Don't have an account? Register" : "Already have an account? Login"}</p>

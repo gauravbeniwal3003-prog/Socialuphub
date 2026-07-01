@@ -125,6 +125,18 @@ async function startServer() {
             animation: spin 1s linear infinite;
             margin: 0 auto 1.5rem auto;
         }
+        .success-icon {
+            color: #10b981;
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            display: none;
+        }
+        .error-icon {
+            color: #ef4444;
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            display: none;
+        }
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
@@ -135,38 +147,135 @@ async function startServer() {
 </head>
 <body>
     <div class="container">
-        <div class="spinner"></div>
-        <h2>Authenticating with Google</h2>
-        <p>Connecting your account securely. This window will close automatically...</p>
+        <div id="status-spinner" class="spinner"></div>
+        <div id="status-success" class="success-icon">✓</div>
+        <div id="status-error" class="error-icon">✗</div>
+        <h2 id="status-title">Authenticating with Google</h2>
+        <p id="status-text">Connecting your account securely. This window will close automatically...</p>
     </div>
     <script>
-        try {
-            // Short timeout to ensure the hash is fully populated in window.location
-            setTimeout(() => {
+        const SUPABASE_URL = "${supabaseUrl}";
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlna3JjZ2Nydm5vY2F1Y2NlYnJmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY4MzA1ODAsImV4cCI6MjA4MjQwNjU4MH0.YPEX1u7LWSPXoBY_DyULmmvuQcYJgcEN-MNYAmy8X6M";
+
+        function updateUI(status, title, text) {
+            const spinner = document.getElementById("status-spinner");
+            const success = document.getElementById("status-success");
+            const error = document.getElementById("status-error");
+            
+            spinner.style.display = status === "loading" ? "block" : "none";
+            success.style.display = status === "success" ? "block" : "none";
+            error.style.display = status === "error" ? "block" : "none";
+            
+            document.getElementById("status-title").innerText = title;
+            document.getElementById("status-text").innerText = text;
+        }
+
+        async function processAuth() {
+            try {
                 const hash = window.location.hash || '';
                 const search = window.location.search || '';
                 
-                if (window.opener) {
-                    console.log("Sending SUPABASE_AUTH_CALLBACK event to opener window");
-                    window.opener.postMessage({ 
-                        type: 'SUPABASE_AUTH_CALLBACK', 
-                        hash: hash,
-                        search: search
-                    }, '*');
+                const cleanHash = hash.startsWith('#') ? hash.substring(1) : hash;
+                const hashParams = new URLSearchParams(cleanHash);
+                const accessToken = hashParams.get('access_token');
+                const refreshToken = hashParams.get('refresh_token');
+                const expiresInRaw = hashParams.get('expires_in') || '3600';
+                const expiresIn = parseInt(expiresInRaw, 10);
+
+                const cleanSearch = search.startsWith('?') ? search.substring(1) : search;
+                const searchParams = new URLSearchParams(cleanSearch);
+                const code = searchParams.get('code');
+
+                const errorParam = searchParams.get('error') || hashParams.get('error');
+                const errorDesc = searchParams.get('error_description') || hashParams.get('error_description') || errorParam;
+
+                if (errorParam) {
+                    localStorage.setItem('oauth_error_trigger', errorDesc || errorParam);
+                    updateUI("error", "Authentication Failed", errorDesc || errorParam);
+                    if (window.opener) {
+                        window.opener.postMessage({ type: 'SUPABASE_AUTH_CALLBACK', error: errorParam, error_description: errorDesc, hash, search }, '*');
+                        setTimeout(() => window.close(), 1500);
+                    }
+                    return;
+                }
+
+                if (accessToken && refreshToken) {
+                    updateUI("loading", "Verifying Session", "Retrieving profile data from Supabase Auth...");
                     
-                    // Allow small buffer for postMessage to be received before closing
+                    // Fetch user info using token to build full local session object
+                    const userResponse = await fetch(SUPABASE_URL + "/auth/v1/user", {
+                        headers: {
+                            "apikey": SUPABASE_ANON_KEY,
+                            "Authorization": "Bearer " + accessToken
+                        }
+                    });
+                    
+                    if (!userResponse.ok) {
+                        throw new Error("Failed to fetch user metadata: HTTP " + userResponse.status);
+                    }
+                    
+                    const userData = await userResponse.json();
+                    
+                    // Construct and save full Supabase session
+                    const projectRef = SUPABASE_URL.replace("https://", "").split(".")[0];
+                    const tokenKey = "sb-" + projectRef + "-auth-token";
+                    const expiresAt = Math.floor(Date.now() / 1000) + expiresIn;
+                    
+                    const sessionData = {
+                        currentSession: {
+                            access_token: accessToken,
+                            token_type: "bearer",
+                            expires_in: expiresIn,
+                            refresh_token: refreshToken,
+                            user: userData,
+                            expires_at: expiresAt
+                        },
+                        expiresAt: expiresAt
+                    };
+                    
+                    localStorage.setItem(tokenKey, JSON.stringify(sessionData));
+                    localStorage.setItem('oauth_sync_trigger', Date.now().toString());
+                    
+                    updateUI("success", "Login Successful", "Your profile was authenticated successfully. This window will now close.");
+                    
+                    if (window.opener) {
+                        window.opener.postMessage({ type: 'SUPABASE_AUTH_CALLBACK', hash, search }, '*');
+                    }
+                    
                     setTimeout(() => {
                         window.close();
-                    }, 800);
+                    }, 1500);
+                } else if (code) {
+                    localStorage.setItem('oauth_code_trigger', code);
+                    updateUI("success", "Exchanging Code", "Authorization code received. Finalizing session...");
+                    
+                    if (window.opener) {
+                        window.opener.postMessage({ type: 'SUPABASE_AUTH_CALLBACK', hash, search }, '*');
+                    }
+                    
+                    setTimeout(() => {
+                        window.close();
+                    }, 1500);
                 } else {
-                    console.warn("No window.opener found. Redirecting to home page.");
-                    window.location.href = '/' + hash + search;
+                    // No auth params yet, might be standard redirect delay
+                    setTimeout(() => {
+                        const updatedHash = window.location.hash || '';
+                        if (!updatedHash && !window.location.search) {
+                            updateUI("error", "No Session Parameters Found", "No access token or authorization code was found in the URL.");
+                        } else {
+                            processAuth();
+                        }
+                    }, 500);
                 }
-            }, 150);
-        } catch (err) {
-            console.error("Popup communication failed:", err);
-            document.body.innerHTML = '<div class="container"><h2 style="color:#ef4444;">Authentication Error</h2><p>' + err.message + '</p></div>';
+            } catch (err) {
+                console.error("Auth processing error:", err);
+                localStorage.setItem('oauth_error_trigger', err.message || "Unknown error during authentication process");
+                updateUI("error", "Authentication Error", err.message || "An unexpected error occurred during verification.");
+            }
         }
+
+        // Start processing on load
+        window.addEventListener("DOMContentLoaded", processAuth);
     </script>
 </body>
 </html>`;
