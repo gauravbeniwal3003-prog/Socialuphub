@@ -178,6 +178,7 @@ const App: React.FC = () => {
   // Handle Supabase Auth Session
   const handleSession = async (session: any) => {
       if (session?.user) {
+          let hasSetDetails = false;
           try {
               // Retrieve pending referral code from localStorage
               const referredByCode = localStorage.getItem('pending_ref_code') || '';
@@ -278,6 +279,7 @@ const App: React.FC = () => {
                           responseBody: JSON.stringify(errData, null, 2),
                           hint: "The backend server rejected the synchronization request. This usually means the authentication token is invalid or expired, or the database rejected user record creation."
                       });
+                      hasSetDetails = true;
                       throw new Error(errData.error || `HTTP ${response.status}`);
                   } else {
                       const textBody = await response.text();
@@ -290,6 +292,7 @@ const App: React.FC = () => {
                           responseBody: textBody,
                           hint: "The backend server returned an HTML page instead of JSON. This typically indicates an Express crash, routing issue, or reverse-proxy error (e.g. 502 Bad Gateway)."
                       });
+                      hasSetDetails = true;
                       throw new Error(`HTTP ${response.status}: Server Error`);
                   }
               }
@@ -306,6 +309,7 @@ const App: React.FC = () => {
                       responseBody: textBody,
                       hint: "The server responded with 200 OK but returned HTML instead of JSON. This happens if the request was redirected to the static SPA fallback index.html page (typically due to a misconfigured endpoint route)."
                   });
+                  hasSetDetails = true;
                   throw new Error("Server returned an invalid HTML response instead of JSON data.");
               }
 
@@ -329,12 +333,13 @@ const App: React.FC = () => {
                       responseBody: JSON.stringify(data),
                       hint: "The request completed but no user profile record was returned in the response object."
                   });
+                  hasSetDetails = true;
                   throw new Error("No user profile returned from sync API.");
               }
           } catch (e: any) {
               console.error("Failed to sync user via server:", e.message || JSON.stringify(e));
               setSyncError(e.message || "Failed to synchronize user profile");
-              if (!syncErrorDetails) {
+              if (!hasSetDetails) {
                   setSyncErrorDetails({
                       message: e.message || "Failed to synchronize user profile",
                       hint: "An unexpected connection or network error occurred during user synchronization. Please review the browser's console logs for network stack tracing."

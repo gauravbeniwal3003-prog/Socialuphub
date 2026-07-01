@@ -484,6 +484,30 @@ async function startServer() {
   app.use(express.json({ limit: '10kb' })); // Limit body size to prevent DoS
   app.use(express.urlencoded({ extended: true, limit: '10kb' })); // Parse URL-encoded bodies (essential for other panels integrating with us)
 
+  // API Request Logger & JSON content-type protection middleware
+  app.use("/api", (req: any, res: any, next: any) => {
+    console.log(`[API Request] ${req.method} ${req.originalUrl}`);
+    
+    // Intercept response send to detect if any route accidentally returns HTML instead of JSON
+    const oldSend = res.send;
+    res.send = function(data: any) {
+      console.log(`[API Response] ${req.method} ${req.originalUrl} - Status: ${res.statusCode} - Content-Type: ${res.get('Content-Type')}`);
+      if (typeof data === 'string' && (data.trim().startsWith('<!DOCTYPE html>') || data.trim().startsWith('<html'))) {
+        console.warn(`[API Response WARNING] HTML returned for API endpoint: ${req.originalUrl}`);
+        // Automatically overwrite HTML with JSON error to guarantee we never leak HTML to a fetch call
+        res.setHeader('Content-Type', 'application/json');
+        return oldSend.call(res, JSON.stringify({
+          error: "API endpoint returned HTML instead of JSON data",
+          hint: "The request reached the server but fell through or crashed, returning an HTML document. We intercepted it to provide this JSON diagnostics fallback.",
+          statusCode: res.statusCode,
+          url: req.originalUrl
+        }));
+      }
+      return oldSend.apply(res, arguments);
+    };
+    next();
+  });
+
   // --- BOT DETECTION MIDDLEWARE ---
   app.use((req, res, next) => {
     const ua = req.headers['user-agent'] || '';
@@ -1405,6 +1429,24 @@ async function startServer() {
       }
       return res.status(500).json({ error: error.message || "Failed to synchronize user profile" });
     }
+  });
+
+  // Synchronize/Create User Profile safely bypassing RLS (GET fallback to return JSON instead of falling through to Vite HTML)
+  app.get("/api/sync-user", (req, res) => {
+    res.status(405).json({
+      error: "Method Not Allowed",
+      hint: "The synchronization endpoint requires a POST request, but a GET request was received. This happens if the browser followed a 301/302 redirect (for example, due to a trailing slash mismatch or HTTP-to-HTTPS upgrade) which converted the POST request into a GET request."
+    });
+  });
+
+  // Catch-all for unmatched API routes to ensure they never fall through to return Vite HTML
+  app.all("/api/*all", (req, res) => {
+    res.status(404).json({
+      error: "API Endpoint Not Found",
+      url: req.originalUrl,
+      method: req.method,
+      hint: "The requested API endpoint is not registered on this server, or the HTTP method is incorrect."
+    });
   });
 
   // Global Error Handler for API routes to guarantee JSON responses (never HTML)

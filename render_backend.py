@@ -272,6 +272,141 @@ def daily_system_cleanup_loop():
             logger.error(f"Error during clean up cycle: {str(ex)}")
         time.sleep(86400)  # Run once every 24 hours
 
+# --- AUTH MIDDLEWARE HELPER ---
+def verify_auth():
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return None, jsonify({"error": "Missing authorization header"}), 401
+    
+    parts = auth_header.split(' ')
+    if len(parts) != 2 or parts[0].lower() != 'bearer':
+        return None, jsonify({"error": "Invalid authorization header format"}), 401
+        
+    token = parts[1]
+    if not token or token == "null" or token == "undefined":
+        return None, jsonify({"error": "Empty or invalid token"}), 401
+        
+    try:
+        url = f"{SUPABASE_URL}/auth/v1/user"
+        headers = {
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization": f"Bearer {token}"
+        }
+        response = requests.get(url, headers=headers, timeout=15)
+        if response.status_code != 200:
+            err_msg = "Invalid session"
+            try:
+                err_data = response.json()
+                if "error_description" in err_data:
+                    err_msg = err_data["error_description"]
+                elif "error" in err_data:
+                    err_msg = err_data["error"]
+            except Exception:
+                pass
+            return None, jsonify({"error": err_msg}), 401
+        
+        user_data = response.json()
+        return user_data, None, 200
+    except Exception as e:
+        logger.error(f"Authentication failed in Python: {str(e)}")
+        return None, jsonify({"error": "Authentication failed", "details": str(e)}), 401
+
+# --- USER PROFILE SYNC ENDPOINT ---
+@app.route("/api/sync-user", methods=["POST", "GET"])
+def sync_user():
+    if request.method == "GET":
+        return jsonify({
+            "error": "Method Not Allowed",
+            "hint": "The synchronization endpoint requires a POST request, but a GET request was received."
+        }), 405
+
+    # Verify authorization token
+    user_data, err_resp, err_code = verify_auth()
+    if err_resp:
+        return err_resp, err_code
+
+    user_id = user_data.get("id")
+    email = user_data.get("email")
+
+    if not user_id:
+        return jsonify({"error": "Invalid synchronization request: missing user identifier."}), 400
+
+    body = request.get_json(silent=True) or {}
+    name = body.get("name")
+    mobile = body.get("mobile")
+    referred_by_code = body.get("referredByCode")
+
+    try:
+        # Check if user already exists
+        existing_users = supabase_get("users", {"id": f"eq.{user_id}"})
+        
+        if existing_users and len(existing_users) > 0:
+            existing_user = existing_users[0]
+            updates = {"lastLogin": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+            if name and not existing_user.get("name"):
+                updates["name"] = name
+            if mobile and not existing_user.get("mobile"):
+                updates["mobile"] = mobile
+                
+            updated_users = supabase_patch("users", {"id": f"eq.{user_id}"}, updates)
+            if updated_users and len(updated_users) > 0:
+                return jsonify({"success": True, "user": updated_users[0]})
+            return jsonify({"success": True, "user": existing_user})
+
+        # Generate referral code
+        import random
+        import string
+        referral_code = f"U{user_id[:4]}{''.join(random.choices(string.digits, k=5))}".upper()
+        
+        referred_by = None
+        if referred_by_code:
+            ref_users = supabase_get("users", {"referral_code": f"eq.{referred_by_code.upper()}"})
+            if ref_users and len(ref_users) > 0:
+                referred_by = ref_users[0].get("id")
+
+        final_name = name or (email.split('@')[0] if email else "User")
+        try:
+            name_check = supabase_get("users", {"name": f"eq.{final_name}"})
+            if name_check and len(name_check) > 0 and name_check[0].get("id") != user_id:
+                final_name = f"{final_name}_{random.randint(1000, 9999)}"
+        except Exception:
+            pass
+
+        new_user = {
+            "id": user_id,
+            "email": email or "",
+            "name": final_name,
+            "mobile": mobile or None,
+            "role": "USER",
+            "balance": 0,
+            "totalSpent": 0,
+            "isBanned": False,
+            "createdAt": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            "lastLogin": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            "referral_code": referral_code,
+            "referred_by": referred_by,
+            "referral_balance": 0,
+            "total_referral_earnings": 0
+        }
+
+        # Save user to database via POST request using standard headers
+        url = f"{SUPABASE_URL}/rest/v1/users"
+        headers = get_supabase_headers()
+        resp = requests.post(url, headers=headers, json=new_user, timeout=15)
+        resp.raise_for_status()
+        inserted = resp.json()
+
+        inserted_user = inserted[0] if (isinstance(inserted, list) and len(inserted) > 0) else new_user
+        return jsonify({"success": True, "user": inserted_user})
+
+    except Exception as e:
+        logger.error(f"Failed to sync user in python backend: {str(e)}")
+        return jsonify({
+            "error": "Failed to synchronize user profile",
+            "details": str(e),
+            "hint": "Ensure the database connection is valid and the user model matches standard schema guidelines."
+        }), 500
+
 # --- SECURE FRONTEND PROXY ENDPOINT ---
 @app.route("/api/smm", methods=["POST"])
 def smm_proxy():
@@ -613,6 +748,16 @@ def start_threads():
     threading.Thread(target=sync_active_statuses_loop, daemon=True).start()
     threading.Thread(target=sync_provider_prices_loop, daemon=True).start()
     threading.Thread(target=daily_system_cleanup_loop, daemon=True).start()
+
+# Catch-all for unmatched API routes to ensure they never fall through to return HTML
+@app.route("/api/<path:path>", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+def api_catch_all(path):
+    return jsonify({
+        "error": "API Endpoint Not Found",
+        "url": request.path,
+        "method": request.method,
+        "hint": "The requested API endpoint is not registered on this Python backend, or the HTTP method is incorrect."
+    }), 404
 
 # Initialize background tasks on server start
 start_threads()
