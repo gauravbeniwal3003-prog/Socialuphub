@@ -125,18 +125,6 @@ async function startServer() {
             animation: spin 1s linear infinite;
             margin: 0 auto 1.5rem auto;
         }
-        .success-icon {
-            color: #10b981;
-            font-size: 3rem;
-            margin-bottom: 1rem;
-            display: none;
-        }
-        .error-icon {
-            color: #ef4444;
-            font-size: 3rem;
-            margin-bottom: 1rem;
-            display: none;
-        }
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
@@ -147,135 +135,38 @@ async function startServer() {
 </head>
 <body>
     <div class="container">
-        <div id="status-spinner" class="spinner"></div>
-        <div id="status-success" class="success-icon">✓</div>
-        <div id="status-error" class="error-icon">✗</div>
-        <h2 id="status-title">Authenticating with Google</h2>
-        <p id="status-text">Connecting your account securely. This window will close automatically...</p>
+        <div class="spinner"></div>
+        <h2>Authenticating with Google</h2>
+        <p>Connecting your account securely. This window will close automatically...</p>
     </div>
     <script>
-        const SUPABASE_URL = "${supabaseUrl}";
-        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlna3JjZ2Nydm5vY2F1Y2NlYnJmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY4MzA1ODAsImV4cCI6MjA4MjQwNjU4MH0.YPEX1u7LWSPXoBY_DyULmmvuQcYJgcEN-MNYAmy8X6M";
-
-        function updateUI(status, title, text) {
-            const spinner = document.getElementById("status-spinner");
-            const success = document.getElementById("status-success");
-            const error = document.getElementById("status-error");
-            
-            spinner.style.display = status === "loading" ? "block" : "none";
-            success.style.display = status === "success" ? "block" : "none";
-            error.style.display = status === "error" ? "block" : "none";
-            
-            document.getElementById("status-title").innerText = title;
-            document.getElementById("status-text").innerText = text;
-        }
-
-        async function processAuth() {
-            try {
+        try {
+            // Short timeout to ensure the hash is fully populated in window.location
+            setTimeout(() => {
                 const hash = window.location.hash || '';
                 const search = window.location.search || '';
                 
-                const cleanHash = hash.startsWith('#') ? hash.substring(1) : hash;
-                const hashParams = new URLSearchParams(cleanHash);
-                const accessToken = hashParams.get('access_token');
-                const refreshToken = hashParams.get('refresh_token');
-                const expiresInRaw = hashParams.get('expires_in') || '3600';
-                const expiresIn = parseInt(expiresInRaw, 10);
-
-                const cleanSearch = search.startsWith('?') ? search.substring(1) : search;
-                const searchParams = new URLSearchParams(cleanSearch);
-                const code = searchParams.get('code');
-
-                const errorParam = searchParams.get('error') || hashParams.get('error');
-                const errorDesc = searchParams.get('error_description') || hashParams.get('error_description') || errorParam;
-
-                if (errorParam) {
-                    localStorage.setItem('oauth_error_trigger', errorDesc || errorParam);
-                    updateUI("error", "Authentication Failed", errorDesc || errorParam);
-                    if (window.opener) {
-                        window.opener.postMessage({ type: 'SUPABASE_AUTH_CALLBACK', error: errorParam, error_description: errorDesc, hash, search }, '*');
-                        setTimeout(() => window.close(), 1500);
-                    }
-                    return;
-                }
-
-                if (accessToken && refreshToken) {
-                    updateUI("loading", "Verifying Session", "Retrieving profile data from Supabase Auth...");
+                if (window.opener) {
+                    console.log("Sending SUPABASE_AUTH_CALLBACK event to opener window");
+                    window.opener.postMessage({ 
+                        type: 'SUPABASE_AUTH_CALLBACK', 
+                        hash: hash,
+                        search: search
+                    }, '*');
                     
-                    // Fetch user info using token to build full local session object
-                    const userResponse = await fetch(SUPABASE_URL + "/auth/v1/user", {
-                        headers: {
-                            "apikey": SUPABASE_ANON_KEY,
-                            "Authorization": "Bearer " + accessToken
-                        }
-                    });
-                    
-                    if (!userResponse.ok) {
-                        throw new Error("Failed to fetch user metadata: HTTP " + userResponse.status);
-                    }
-                    
-                    const userData = await userResponse.json();
-                    
-                    // Construct and save full Supabase session
-                    const projectRef = SUPABASE_URL.replace("https://", "").split(".")[0];
-                    const tokenKey = "sb-" + projectRef + "-auth-token";
-                    const expiresAt = Math.floor(Date.now() / 1000) + expiresIn;
-                    
-                    const sessionData = {
-                        currentSession: {
-                            access_token: accessToken,
-                            token_type: "bearer",
-                            expires_in: expiresIn,
-                            refresh_token: refreshToken,
-                            user: userData,
-                            expires_at: expiresAt
-                        },
-                        expiresAt: expiresAt
-                    };
-                    
-                    localStorage.setItem(tokenKey, JSON.stringify(sessionData));
-                    localStorage.setItem('oauth_sync_trigger', Date.now().toString());
-                    
-                    updateUI("success", "Login Successful", "Your profile was authenticated successfully. This window will now close.");
-                    
-                    if (window.opener) {
-                        window.opener.postMessage({ type: 'SUPABASE_AUTH_CALLBACK', hash, search }, '*');
-                    }
-                    
+                    // Allow small buffer for postMessage to be received before closing
                     setTimeout(() => {
                         window.close();
-                    }, 1500);
-                } else if (code) {
-                    localStorage.setItem('oauth_code_trigger', code);
-                    updateUI("success", "Exchanging Code", "Authorization code received. Finalizing session...");
-                    
-                    if (window.opener) {
-                        window.opener.postMessage({ type: 'SUPABASE_AUTH_CALLBACK', hash, search }, '*');
-                    }
-                    
-                    setTimeout(() => {
-                        window.close();
-                    }, 1500);
+                    }, 800);
                 } else {
-                    // No auth params yet, might be standard redirect delay
-                    setTimeout(() => {
-                        const updatedHash = window.location.hash || '';
-                        if (!updatedHash && !window.location.search) {
-                            updateUI("error", "No Session Parameters Found", "No access token or authorization code was found in the URL.");
-                        } else {
-                            processAuth();
-                        }
-                    }, 500);
+                    console.warn("No window.opener found. Redirecting to home page.");
+                    window.location.href = '/' + hash + search;
                 }
-            } catch (err) {
-                console.error("Auth processing error:", err);
-                localStorage.setItem('oauth_error_trigger', err.message || "Unknown error during authentication process");
-                updateUI("error", "Authentication Error", err.message || "An unexpected error occurred during verification.");
-            }
+            }, 150);
+        } catch (err) {
+            console.error("Popup communication failed:", err);
+            document.body.innerHTML = '<div class="container"><h2 style="color:#ef4444;">Authentication Error</h2><p>' + err.message + '</p></div>';
         }
-
-        // Start processing on load
-        window.addEventListener("DOMContentLoaded", processAuth);
     </script>
 </body>
 </html>`;
@@ -593,43 +484,6 @@ async function startServer() {
   app.use(express.json({ limit: '10kb' })); // Limit body size to prevent DoS
   app.use(express.urlencoded({ extended: true, limit: '10kb' })); // Parse URL-encoded bodies (essential for other panels integrating with us)
 
-  // API Request Logger & JSON content-type protection middleware
-  app.use("/api", (req: any, res: any, next: any) => {
-    const logMsg = `[${new Date().toISOString()}] [API Request] ${req.method} ${req.originalUrl} - Headers: ${JSON.stringify(req.headers)}`;
-    console.log(logMsg);
-    try {
-      fs.appendFileSync(path.join(process.cwd(), "api_requests.log"), logMsg + "\n", "utf8");
-    } catch (e) {}
-
-    // Intercept response send to detect if any route accidentally returns HTML instead of JSON
-    const oldSend = res.send;
-    res.send = function(data: any) {
-      const resMsg = `[${new Date().toISOString()}] [API Response] ${req.method} ${req.originalUrl} - Status: ${res.statusCode} - Content-Type: ${res.get('Content-Type')}`;
-      console.log(resMsg);
-      try {
-        fs.appendFileSync(path.join(process.cwd(), "api_requests.log"), resMsg + "\n", "utf8");
-      } catch (e) {}
-
-      if (typeof data === 'string' && (data.trim().startsWith('<!DOCTYPE html>') || data.trim().startsWith('<html'))) {
-        console.warn(`[API Response WARNING] HTML returned for API endpoint: ${req.originalUrl}`);
-        // Automatically overwrite HTML with JSON error to guarantee we never leak HTML to a fetch call
-        res.setHeader('Content-Type', 'application/json');
-        const modifiedData = JSON.stringify({
-          error: "API endpoint returned HTML instead of JSON data",
-          hint: "The request reached the server but fell through or crashed, returning an HTML document. We intercepted it to provide this JSON diagnostics fallback.",
-          statusCode: res.statusCode,
-          url: req.originalUrl
-        });
-        try {
-          fs.appendFileSync(path.join(process.cwd(), "api_requests.log"), `[${new Date().toISOString()}] [API Intercepted HTML] Overwrote with JSON fallback\n`, "utf8");
-        } catch (e) {}
-        return oldSend.call(res, modifiedData);
-      }
-      return oldSend.apply(res, arguments);
-    };
-    next();
-  });
-
   // --- BOT DETECTION MIDDLEWARE ---
   app.use((req, res, next) => {
     const ua = req.headers['user-agent'] || '';
@@ -878,67 +732,30 @@ async function startServer() {
 
   // --- AUTH MIDDLEWARE ---
   const verifyAuth = async (req: any, res: any, next: any) => {
-    try {
-      const authHeader = req.headers.authorization;
-      if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
 
-      const parts = authHeader.split(' ');
-      if (parts.length !== 2 || parts[0].toLowerCase() !== 'bearer') {
-        return res.status(401).json({ error: "Invalid authorization header format" });
-      }
+    const token = authHeader.split(' ')[1];
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
 
-      const token = parts[1];
-      if (!token || token === "null" || token === "undefined") {
-        return res.status(401).json({ error: "Empty or invalid token" });
-      }
-
-      if (!supabaseAdmin) {
-        console.error("[verifyAuth] supabaseAdmin is not initialized.");
-        return res.status(500).json({ error: "Server authentication configuration error" });
-      }
-
-      const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
-
-      if (error || !user) {
-        console.warn("[verifyAuth] Auth check failed:", error?.message || "User not found");
-        return res.status(401).json({ error: "Invalid session", details: error?.message });
-      }
-
-      req.user = user;
-      next();
-    } catch (err: any) {
-      console.error("[verifyAuth] Critical error in middleware:", err.message || err);
-      return res.status(401).json({ error: "Authentication failed", message: err.message });
-    }
+    if (error || !user) return res.status(401).json({ error: "Invalid session" });
+    req.user = user;
+    next();
   };
 
   const verifyAdmin = async (req: any, res: any, next: any) => {
-    try {
-      await verifyAuth(req, res, async () => {
-        try {
-          if (!supabaseAdmin) {
-            return res.status(500).json({ error: "Server database configuration error" });
-          }
+    await verifyAuth(req, res, async () => {
+      const { data: profile } = await supabaseAdmin
+        .from('users')
+        .select('role')
+        .eq('id', req.user.id)
+        .single();
 
-          const { data: profile } = await supabaseAdmin
-            .from('users')
-            .select('role')
-            .eq('id', req.user.id)
-            .single();
-
-          if (profile?.role !== 'ADMIN') {
-            return res.status(403).json({ error: "Admin access required" });
-          }
-          next();
-        } catch (dbErr: any) {
-          console.error("[verifyAdmin] Database check failed:", dbErr.message || dbErr);
-          return res.status(500).json({ error: "Database verification failed" });
-        }
-      });
-    } catch (err: any) {
-      console.error("[verifyAdmin] Critical error in middleware:", err.message || err);
-      return res.status(500).json({ error: "Admin verification failed" });
-    }
+      if (profile?.role !== 'ADMIN') {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      next();
+    });
   };
 
   // --- USER PLATFORM SMM API ENDPOINT ---
@@ -1423,19 +1240,11 @@ async function startServer() {
   });
 
   // Synchronize/Create User Profile safely bypassing RLS
-  app.post(["/api/sync-user", "/api/sync-user/"], verifyAuth, async (req: any, res: any) => {
+  app.post("/api/sync-user", verifyAuth, async (req: any, res: any) => {
+    const { id, email } = req.user;
+    const { name, mobile, referredByCode } = req.body;
+
     try {
-      if (!req.user) {
-        return res.status(401).json({ error: "Unauthorized access: User session details not found." });
-      }
-
-      const { id, email } = req.user;
-      const { name, mobile, referredByCode } = req.body || {};
-
-      if (!id) {
-        return res.status(400).json({ error: "Invalid synchronization request: missing user identifier." });
-      }
-
       // 1. Check if user already exists
       const { data: existingUser, error: selectErr } = await supabaseAdmin
         .from('users')
@@ -1521,21 +1330,14 @@ async function startServer() {
       return res.json({ success: true, user: insertedUser });
     } catch (error: any) {
       console.error("Failed to sync user in backend:", error.message || error);
-      
-      const safeUserId = req.user?.id || "unknown";
-      const safeUserEmail = req.user?.email || "unknown";
-      const safeName = req.body?.name || "unknown";
-      const safeMobile = req.body?.mobile || "unknown";
-      const safeReferredByCode = req.body?.referredByCode || "unknown";
-
       try {
         const errorLog = {
           timestamp: new Date().toISOString(),
-          userId: safeUserId,
-          userEmail: safeUserEmail,
-          inputName: safeName,
-          inputMobile: safeMobile,
-          referredByCode: safeReferredByCode,
+          userId: id,
+          userEmail: email,
+          inputName: name,
+          inputMobile: mobile,
+          referredByCode: referredByCode,
           errorMessage: error.message || String(error),
           errorDetails: error.details || null,
           errorHint: error.hint || null,
@@ -1551,34 +1353,6 @@ async function startServer() {
       }
       return res.status(500).json({ error: error.message || "Failed to synchronize user profile" });
     }
-  });
-
-  // Synchronize/Create User Profile safely bypassing RLS (GET fallback to return JSON instead of falling through to Vite HTML)
-  app.get(["/api/sync-user", "/api/sync-user/"], (req, res) => {
-    res.status(405).json({
-      error: "Method Not Allowed",
-      hint: "The synchronization endpoint requires a POST request, but a GET request was received. This happens if the browser followed a 301/302 redirect (for example, due to a trailing slash mismatch or HTTP-to-HTTPS upgrade) which converted the POST request into a GET request."
-    });
-  });
-
-  // Catch-all for unmatched API routes to ensure they never fall through to return Vite HTML
-  app.all("/api/*all", (req, res) => {
-    res.status(404).json({
-      error: "API Endpoint Not Found",
-      url: req.originalUrl,
-      method: req.method,
-      hint: "The requested API endpoint is not registered on this server, or the HTTP method is incorrect."
-    });
-  });
-
-  // Global Error Handler for API routes to guarantee JSON responses (never HTML)
-  app.use("/api", (err: any, req: any, res: any, next: any) => {
-    console.error("[Global API Error Handler] Caught error:", err);
-    res.status(err.status || 500).json({
-      error: err.message || "An unexpected server error occurred",
-      details: err.details || null,
-      hint: "Guaranteed JSON api safety fallback"
-    });
   });
 
   // --- VITE MIDDLEWARE ---

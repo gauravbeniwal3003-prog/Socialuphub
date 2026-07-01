@@ -81,23 +81,12 @@ interface AuthContextType {
   logout: () => void;
 }
 
-interface SyncErrorDetails {
-  message: string;
-  statusCode?: number;
-  url?: string;
-  contentType?: string;
-  responseBody?: string;
-  hint?: string;
-}
-
 const AuthContext = createContext<AuthContextType>({} as AuthContextType);
 export const useAuth = () => useContext(AuthContext);
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
-  const [syncErrorDetails, setSyncErrorDetails] = useState<SyncErrorDetails | null>(null);
-  const [blockedOAuthUrl, setBlockedOAuthUrl] = useState<string | null>(null);
   const [view, setView] = useState<'LANDING' | 'DASHBOARD' | 'AUTH' | 'BANNED' | 'MAINTENANCE'>('LANDING');
   const [authLoading, setAuthLoading] = useState(true);
   const [banTimeRemaining, setBanTimeRemaining] = useState<string>('');
@@ -179,7 +168,6 @@ const App: React.FC = () => {
   // Handle Supabase Auth Session
   const handleSession = async (session: any) => {
       if (session?.user) {
-          let hasSetDetails = false;
           try {
               // Retrieve pending referral code from localStorage
               const referredByCode = localStorage.getItem('pending_ref_code') || '';
@@ -187,115 +175,22 @@ const App: React.FC = () => {
               const fallbackMobile = session.user.user_metadata?.phone || "";
 
               // Sync user on the backend safely bypassing client-side RLS policies and race conditions
-              const isLocalOrAiStudio = typeof window !== 'undefined' && (
-                  window.location.hostname.includes('run.app') || 
-                  window.location.hostname.includes('localhost') || 
-                  window.location.hostname.includes('127.0.0.1') ||
-                  window.location.hostname.includes('aistudio')
-              );
-              
-              const backendUrl = isLocalOrAiStudio ? '' : (config?.renderBackendUrl?.trim() || '');
-              const baseUrl = backendUrl ? backendUrl.replace(/\/$/, '') : '';
-              const syncUrl = `${baseUrl}/api/sync-user`;
-              
-              console.log(`[Auth Sync] Syncing user profile via: ${syncUrl}`);
-
-              const candidateUrls = [
-                  syncUrl,
-                  syncUrl.endsWith('/') ? syncUrl.slice(0, -1) : `${syncUrl}/`,
-                  '/api/sync-user',
-                  '/api/sync-user/'
-              ];
-
-              // Filter unique URLs to avoid duplicate fetches
-              const uniqueUrls = Array.from(new Set(candidateUrls));
-              console.log("[Auth Sync] Unique candidate URLs to attempt:", uniqueUrls);
-
-              let response: Response | null = null;
-              let finalUrlUsed = "";
-
-              for (const url of uniqueUrls) {
-                  try {
-                      console.log(`[Auth Sync] Attempting fetch to: ${url}`);
-                      const res = await fetch(url, {
-                          method: 'POST',
-                          headers: {
-                              'Content-Type': 'application/json',
-                              'Authorization': `Bearer ${session.access_token}`
-                          },
-                          body: JSON.stringify({
-                              name: fallbackName,
-                              mobile: fallbackMobile,
-                              referredByCode
-                          })
-                      });
-
-                      const contentType = res.headers.get("content-type") || "";
-                      if (res.ok && contentType.includes("application/json")) {
-                          console.log(`[Auth Sync] Successfully synchronized via URL: ${url}`);
-                          response = res;
-                          finalUrlUsed = url;
-                          break;
-                      } else {
-                          console.warn(`[Auth Sync] URL ${url} returned status ${res.status} with content-type ${contentType}. Trying next candidate...`);
-                          if (!response) {
-                              response = res;
-                              finalUrlUsed = url;
-                          }
-                      }
-                  } catch (err: any) {
-                      console.warn(`[Auth Sync] Failed to fetch URL ${url}: ${err.message}. Trying next candidate...`);
-                  }
-              }
-
-              if (!response) {
-                  throw new Error("All backend synchronization endpoints failed or returned unreachable network states.");
-              }
+              const response = await fetch('/api/sync-user', {
+                  method: 'POST',
+                  headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${session.access_token}`
+                  },
+                  body: JSON.stringify({
+                      name: fallbackName,
+                      mobile: fallbackMobile,
+                      referredByCode
+                  })
+              });
 
               if (!response.ok) {
-                  const contentType = response.headers.get("content-type") || "";
-                  if (contentType.includes("application/json")) {
-                      const errData = await response.json().catch(() => ({}));
-                      setSyncErrorDetails({
-                          message: errData.error || `HTTP ${response.status}: Server Error`,
-                          statusCode: response.status,
-                          url: finalUrlUsed || '/api/sync-user',
-                          contentType,
-                          responseBody: JSON.stringify(errData, null, 2),
-                          hint: "The backend server rejected the synchronization request. This usually means the authentication token is invalid or expired, or the database rejected user record creation."
-                      });
-                      hasSetDetails = true;
-                      throw new Error(errData.error || `HTTP ${response.status}`);
-                  } else {
-                      const textBody = await response.text();
-                      console.error(`HTTP ${response.status} Error - Expected JSON from ${finalUrlUsed}, but received HTML/text:`, textBody.substring(0, 500));
-                      setSyncErrorDetails({
-                          message: `HTTP ${response.status}: Server Error`,
-                          statusCode: response.status,
-                          url: finalUrlUsed || '/api/sync-user',
-                          contentType,
-                          responseBody: textBody,
-                          hint: "The backend server returned an HTML page instead of JSON. This typically indicates an Express crash, routing issue, or reverse-proxy error (e.g. 502 Bad Gateway)."
-                      });
-                      hasSetDetails = true;
-                      throw new Error(`HTTP ${response.status}: Server Error`);
-                  }
-              }
-
-              const contentType = response.headers.get("content-type") || "";
-              if (!contentType.includes("application/json")) {
-                  const textBody = await response.text();
-                  console.error("Expected JSON response from /api/sync-user, but received HTML/text:", textBody.substring(0, 500));
-                  setSyncErrorDetails({
-                      message: "Invalid Response Content-Type",
-                      statusCode: response.status,
-                      url: '/api/sync-user',
-                      contentType,
-                      responseBody: textBody,
-                      hint: "The server responded with 200 OK but returned HTML instead of JSON. This happens if the request was redirected to the static SPA fallback index.html page (typically due to a misconfigured endpoint route)."
-                  });
-                  hasSetDetails = true;
-                  throw new Error("Server returned an invalid HTML response instead of JSON data.");
+                  const errData = await response.json().catch(() => ({}));
+                  throw new Error(errData.error || `HTTP ${response.status}`);
               }
 
               const data = await response.json();
@@ -303,33 +198,17 @@ const App: React.FC = () => {
                   // If successfully synced, remove referral code from localStorage
                   localStorage.removeItem('pending_ref_code');
                   setSyncError(null);
-                  setSyncErrorDetails(null);
                   
                   const banStatus = checkBanStatus(data.user);
                   setUser({ ...data.user, id: session.user.id });
                   if (banStatus !== 'ALLOWED') setView('BANNED');
                   else if (view === 'AUTH' || view === 'LANDING') setView('DASHBOARD');
               } else {
-                  setSyncErrorDetails({
-                      message: "Empty Profile Data",
-                      statusCode: response.status,
-                      url: '/api/sync-user',
-                      contentType,
-                      responseBody: JSON.stringify(data),
-                      hint: "The request completed but no user profile record was returned in the response object."
-                  });
-                  hasSetDetails = true;
                   throw new Error("No user profile returned from sync API.");
               }
           } catch (e: any) {
               console.error("Failed to sync user via server:", e.message || JSON.stringify(e));
               setSyncError(e.message || "Failed to synchronize user profile");
-              if (!hasSetDetails) {
-                  setSyncErrorDetails({
-                      message: e.message || "Failed to synchronize user profile",
-                      hint: "An unexpected connection or network error occurred during user synchronization. Please review the browser's console logs for network stack tracing."
-                  });
-              }
               await supabase.auth.signOut();
               setUser(null);
               setView('AUTH');
@@ -375,30 +254,7 @@ const App: React.FC = () => {
         const accessToken = params.get('access_token');
         const refreshToken = params.get('refresh_token');
 
-        const search = event.data?.search || '';
-        const cleanSearch = search.startsWith('?') ? search.substring(1) : search;
-        const searchParams = new URLSearchParams(cleanSearch);
-        const code = searchParams.get('code');
-
-        const errorParam = searchParams.get('error') || params.get('error');
-        const errorDescParam = searchParams.get('error_description') || params.get('error_description');
-
-        if (errorParam) {
-          console.error("OAuth error received in callback message:", errorParam, errorDescParam);
-          setSyncError(`Google Auth Error: ${errorDescParam || errorParam}`);
-          setSyncErrorDetails({
-            message: errorDescParam || errorParam,
-            statusCode: 400,
-            url: '/auth/callback',
-            contentType: 'application/json',
-            responseBody: JSON.stringify({ error: errorParam, error_description: errorDescParam }),
-            hint: "The OAuth authorization server or Supabase returned an error during redirect. This happens if the user cancelled the login, or if the Google API client ID and Client Secret credentials are misconfigured or inactive in Supabase Settings."
-          });
-          return;
-        }
-
         if (accessToken && refreshToken) {
-          console.log("Setting session from popup OAuth implicit hash tokens...");
           supabase.auth.setSession({
             access_token: accessToken,
             refresh_token: refreshToken
@@ -406,41 +262,9 @@ const App: React.FC = () => {
             if (error) {
               console.error("Failed to set session from popup parameters:", error.message);
               setSyncError(error.message);
-              setSyncErrorDetails({
-                message: error.message,
-                hint: "An error occurred inside the Supabase Auth client while establishing a session with the implicit tokens."
-              });
             } else if (session) {
               handleSession(session);
             }
-          }).catch(err => {
-              console.error("Critical error in setSession:", err);
-              setSyncError(err.message || "Failed to set session.");
-              setSyncErrorDetails({
-                message: err.message || "Set session crash",
-                hint: "A critical JS runtime error occurred while passing OAuth tokens to Supabase client library. This may happen if the library fails to parse an HTML error page."
-              });
-          });
-        } else if (code) {
-          console.log("Exchanging code for session in opener window from popup callback...");
-          supabase.auth.exchangeCodeForSession(code).then(({ data: { session }, error }) => {
-            if (error) {
-              console.error("Failed to exchange code for session from popup callback:", error.message);
-              setSyncError("OAuth code exchange failed: " + error.message);
-              setSyncErrorDetails({
-                message: error.message,
-                hint: "The OAuth authorization code returned in the popup search query could not be exchanged for a session. This usually means the code is expired, invalid, or already redeemed."
-              });
-            } else if (session) {
-              handleSession(session);
-            }
-          }).catch(err => {
-              console.error("Critical error in exchangeCodeForSession:", err);
-              setSyncError(err.message || "Code exchange failed");
-              setSyncErrorDetails({
-                message: err.message || "Code exchange crash",
-                hint: "A critical JS runtime error occurred while exchanging the authorization code. This typically happens if the Supabase server is offline or returned HTML instead of JSON."
-              });
           });
         } else {
           // Fallback to checking current session
@@ -452,122 +276,16 @@ const App: React.FC = () => {
     };
     window.addEventListener('message', handleMessage);
 
-    // Polling backup for sandboxed window.opener null issues
-    const syncInterval = setInterval(async () => {
-      const projectRef = "igkrcgcrvnocauccebrf";
-      const tokenKey = `sb-${projectRef}-auth-token`;
-      const localSessionRaw = localStorage.getItem(tokenKey);
-      const oauthTrigger = localStorage.getItem('oauth_sync_trigger');
-      const oauthErrorTrigger = localStorage.getItem('oauth_error_trigger');
-      
-      if (oauthErrorTrigger) {
-        localStorage.removeItem('oauth_error_trigger');
-        console.error("[Auth Sync] Detected OAuth error via localStorage trigger:", oauthErrorTrigger);
-        setSyncError(`Google Auth Error: ${oauthErrorTrigger}`);
-        setSyncErrorDetails({
-          message: oauthErrorTrigger,
-          statusCode: 400,
-          url: '/auth/callback',
-          contentType: 'application/json',
-          hint: "The OAuth authorization server or Supabase returned an error during redirect. This happens if the user cancelled the login, or if the Google API client ID and Client Secret credentials are misconfigured or inactive in Supabase Settings."
-        });
-        return;
-      }
-
-      if (localSessionRaw && oauthTrigger) {
-        localStorage.removeItem('oauth_sync_trigger'); // Consume trigger
-        console.log("[Auth Sync] Detected session written to localStorage by popup!");
-        try {
-          const parsed = JSON.parse(localSessionRaw);
-          if (parsed?.currentSession) {
-            const { data: { session }, error } = await supabase.auth.setSession({
-              access_token: parsed.currentSession.access_token,
-              refresh_token: parsed.currentSession.refresh_token
-            });
-            if (error) {
-              console.error("[Auth Sync] Failed to set session from localStorage polling:", error.message);
-              setSyncError(error.message);
-            } else if (session) {
-              handleSession(session);
-            }
-          }
-        } catch (err: any) {
-          console.error("[Auth Sync] Failed to recover session from dynamic polling:", err);
-          setSyncError(err.message || "Failed to parse session from secure callback store.");
-        }
-      }
-
-      const oauthCodeTrigger = localStorage.getItem('oauth_code_trigger');
-      if (oauthCodeTrigger) {
-        localStorage.removeItem('oauth_code_trigger'); // Consume trigger
-        console.log("[Auth Sync] Detected authorization code written to localStorage by popup!");
-        try {
-          const { data: { session }, error } = await supabase.auth.exchangeCodeForSession(oauthCodeTrigger);
-          if (error) {
-            console.error("[Auth Sync] Failed to exchange code from localStorage polling:", error.message);
-            setSyncError(error.message);
-          } else if (session) {
-            handleSession(session);
-          }
-        } catch (err: any) {
-          console.error("[Auth Sync] Failed to exchange code from dynamic polling:", err);
-          setSyncError(err.message || "Failed to redeem authorization code.");
-        }
-      }
-    }, 500);
-
-    // 3. Initial session check and code/token exchange on startup
-    const urlParams = new URLSearchParams(window.location.search);
-    const code = urlParams.get('code');
-    const hashParams = new URLSearchParams(window.location.hash.startsWith('#') ? window.location.hash.substring(1) : window.location.hash);
-    const accessToken = hashParams.get('access_token');
-    const refreshToken = hashParams.get('refresh_token');
-
-    if (accessToken && refreshToken) {
-      console.log("Startup: setting session from URL hash tokens...");
-      supabase.auth.setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken
-      }).then(({ data: { session }, error }) => {
-        if (error) {
-          console.error("Startup setSession error:", error.message);
-          setSyncError("Startup setSession error: " + error.message);
-        } else if (session) {
-          handleSession(session);
-          window.history.replaceState({}, document.title, window.location.pathname);
-        }
-      }).catch(err => {
-         console.error("Startup setSession critical error:", err);
-         setSyncError(err.message || "Startup session establishment failed");
-      });
-    } else if (code) {
-      console.log("Startup: Exchanging URL code for session...");
-      supabase.auth.exchangeCodeForSession(code).then(({ data: { session }, error }) => {
-        if (error) {
-          console.error("Startup exchangeCodeForSession error:", error.message);
-          setSyncError("Startup code exchange error: " + error.message);
-        } else if (session) {
-          handleSession(session);
-          window.history.replaceState({}, document.title, window.location.pathname);
-        }
-      }).catch(err => {
-         console.error("Startup exchangeCodeForSession critical error:", err);
-         setSyncError(err.message || "Startup code exchange failed");
-      });
-    } else {
-      supabase.auth.getSession().then(({ data: { session } }) => {
-          handleSession(session);
-      }).catch(err => {
-          console.error("Startup getSession failed:", err);
-      });
-    }
+    // 3. Initial session check
+    supabase.auth.getSession().then(({ data: { session } }) => {
+        handleSession(session);
+    });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
         handleSession(session);
     });
 
     return () => {
-      clearInterval(syncInterval);
       subscription.unsubscribe();
       window.removeEventListener('message', handleMessage);
     };
@@ -589,8 +307,6 @@ const App: React.FC = () => {
 
   const loginWithGoogle = async (refCode?: string) => {
     setSyncError(null);
-    setSyncErrorDetails(null);
-    setBlockedOAuthUrl(null);
     if (refCode) {
       localStorage.setItem('pending_ref_code', refCode);
     }
@@ -620,10 +336,9 @@ const App: React.FC = () => {
         `width=${width},height=${height},left=${left},top=${top}`
       );
 
-      // If the popup was blocked by a popup blocker, set state so we can show user-clickable fallback UI
+      // If the popup was blocked by a popup blocker, fallback to direct redirect
       if (!popup) {
-        console.warn("Popup blocked by browser. Exposing secure URL for direct click handler.");
-        setBlockedOAuthUrl(data.url);
+        window.location.assign(data.url);
       }
     }
   };
@@ -706,10 +421,7 @@ const App: React.FC = () => {
           return;
       }
 
-      setError(''); 
-      setSyncError(null);
-      setSyncErrorDetails(null);
-      setLoading(true);
+      setError(''); setLoading(true);
       try { 
           if (mode === 'REGISTER') {
               await register(email, pass, name, mobile, refCode);
@@ -749,43 +461,7 @@ const App: React.FC = () => {
                    <input className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl p-3.5 text-[var(--app-text)] placeholder-[var(--app-text-muted)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)] outline-none transition-all text-sm font-medium" placeholder="Email or Mobile Number" value={identifier} onChange={e => setIdentifier(e.target.value)} required />
                )}
                <input className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl p-3.5 text-[var(--app-text)] placeholder-[var(--app-text-muted)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)] outline-none transition-all text-sm font-medium" placeholder="Password" type="password" value={pass} onChange={e => setPass(e.target.value)} required />
-               {error && (
-                   <div className="space-y-3">
-                       <div className="text-red-600 text-xs bg-red-50 dark:bg-red-950/20 p-3 rounded-xl border border-red-200 dark:border-red-900/40 text-center font-bold">
-                           {error}
-                       </div>
-                       {syncErrorDetails && (
-                           <div className="bg-neutral-950 border border-neutral-800 p-4 rounded-xl text-left font-sans space-y-2">
-                               <div className="flex items-center gap-1.5 text-xs font-black text-amber-500 uppercase tracking-wider">
-                                   <span className="inline-block w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
-                                   Diagnostic Console
-                               </div>
-                               <p className="text-[11px] text-neutral-400 leading-relaxed">
-                                   <strong>Status Code:</strong> {syncErrorDetails.statusCode || "N/A"}<br/>
-                                   <strong>Endpoint:</strong> {syncErrorDetails.url || "N/A"}<br/>
-                                   <strong>Content-Type:</strong> {syncErrorDetails.contentType || "N/A"}<br/>
-                                   <strong>Suggested Reason:</strong> {syncErrorDetails.hint || "Check your network connection and database synchronization."}
-                               </p>
-                               {syncErrorDetails.responseBody && (
-                                   <div className="space-y-1">
-                                       <div className="text-[10px] uppercase font-bold text-neutral-500">Raw Response:</div>
-                                       <pre className="text-[10px] bg-black text-emerald-400 p-2.5 rounded border border-neutral-850 overflow-x-auto font-mono max-h-32 select-all leading-normal">
-                                           {syncErrorDetails.responseBody.substring(0, 300)}
-                                           {syncErrorDetails.responseBody.length > 300 ? "..." : ""}
-                                       </pre>
-                                   </div>
-                               )}
-                               <button 
-                                   type="button" 
-                                   onClick={() => { setSyncError(null); setSyncErrorDetails(null); setError(''); }}
-                                   className="w-full text-center text-[10px] uppercase font-black tracking-widest text-neutral-400 hover:text-white transition-colors pt-1"
-                               >
-                                   Clear Diagnostic & Retry
-                               </button>
-                           </div>
-                       )}
-                   </div>
-               )}
+               {error && <div className="text-red-600 text-xs bg-red-50 dark:bg-red-950/20 p-3 rounded-xl border border-red-200 dark:border-red-900/40 text-center font-bold">{error}</div>}
                <button disabled={loading} className="w-full bg-[var(--app-accent)] hover:bg-[var(--app-accent-hover)] disabled:opacity-50 text-white font-black uppercase text-sm tracking-wider py-3.5 rounded-xl transition-all shadow-[0_4px_14px_rgba(46,189,89,0.3)]">{loading ? 'Processing...' : (mode === 'LOGIN' ? 'Login' : 'Register')}</button>
             </form>
 
@@ -795,12 +471,12 @@ const App: React.FC = () => {
             </div>
 
             <button 
-                onClick={() => blockedOAuthUrl ? (() => { const w = window.open(blockedOAuthUrl, 'supabase-auth', 'width=600,height=700'); if (w) setBlockedOAuthUrl(null); })() : loginWithGoogle(refCode)}
+                onClick={() => loginWithGoogle(refCode)}
                 disabled={loading}
-                className={`w-full mt-4 flex items-center justify-center gap-3 border font-bold py-3.5 rounded-xl transition-all text-sm ${blockedOAuthUrl ? "bg-amber-500/10 border-amber-500/30 text-amber-500 animate-pulse" : "bg-white hover:bg-gray-50 border-gray-200 text-black"}`}
+                className="w-full mt-4 flex items-center justify-center gap-3 bg-white hover:bg-gray-50 border border-gray-200 text-black font-bold py-3.5 rounded-xl transition-all text-sm"
             >
                 <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5" referrerPolicy="no-referrer" />
-                {blockedOAuthUrl ? "⚠️ Pop-up Blocked - Click to Authorize" : "Google"}
+                Google
             </button>
 
             <p className="text-center mt-6 text-[var(--app-text-muted)] hover:text-[var(--app-text)] text-sm cursor-pointer font-medium transition-colors" onClick={() => setMode(mode === 'LOGIN' ? 'REGISTER' : 'LOGIN')}>{mode === 'LOGIN' ? "Don't have an account? Register" : "Already have an account? Login"}</p>
