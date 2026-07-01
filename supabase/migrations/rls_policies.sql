@@ -3,7 +3,48 @@
 -- ===============================================================
 -- Run this in your Supabase SQL Editor to secure your database.
 
--- 1. CLEAN UP PREVIOUS POLICIES & FUNCTIONS TO PREVENT CONFLICTS
+-- 1. ENSURE THE settings TABLE AND COLUMNS EXIST (Idempotent schema upgrade)
+DO $$
+BEGIN
+    -- Create settings table if not exists
+    CREATE TABLE IF NOT EXISTS public.settings (
+        id TEXT PRIMARY KEY DEFAULT 'global',
+        "globalMarginPercent" NUMERIC DEFAULT 20,
+        "globalMarginFixed" NUMERIC DEFAULT 0,
+        "maintenanceMode" BOOLEAN DEFAULT false,
+        "themeBg" TEXT,
+        "themeDarkBg" TEXT,
+        "themeAccent" TEXT,
+        "referralSignupBonus" NUMERIC DEFAULT 1.0,
+        "referralDepositBonus" NUMERIC DEFAULT 5.0,
+        "referralMinDeposit" NUMERIC DEFAULT 10.0,
+        "isReferralSystemEnabled" BOOLEAN DEFAULT true
+    );
+
+    -- Ensure Render Backend URL & Landing Video URL columns exist with exact casing
+    ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS "renderBackendUrl" TEXT DEFAULT '';
+    ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS "landingVideoUrl" TEXT DEFAULT 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+    
+    -- Ensure other config columns exist
+    ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS "globalMarginPercent" NUMERIC DEFAULT 20;
+    ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS "globalMarginFixed" NUMERIC DEFAULT 0;
+    ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS "maintenanceMode" BOOLEAN DEFAULT false;
+    ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS "themeBg" TEXT;
+    ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS "themeDarkBg" TEXT;
+    ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS "themeAccent" TEXT;
+    ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS "referralSignupBonus" NUMERIC DEFAULT 1.0;
+    ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS "referralDepositBonus" NUMERIC DEFAULT 5.0;
+    ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS "referralMinDeposit" NUMERIC DEFAULT 10.0;
+    ALTER TABLE public.settings ADD COLUMN IF NOT EXISTS "isReferralSystemEnabled" BOOLEAN DEFAULT true;
+
+    -- Seed the default global settings row if not present
+    INSERT INTO public.settings (id) VALUES ('global') ON CONFLICT (id) DO NOTHING;
+EXCEPTION
+    WHEN OTHERS THEN 
+        RAISE NOTICE 'Skipping setting column addition: %', SQLERRM;
+END $$;
+
+-- 2. CLEAN UP PREVIOUS POLICIES & FUNCTIONS TO PREVENT CONFLICTS
 DROP POLICY IF EXISTS "Users can view own profile" ON public.users;
 DROP POLICY IF EXISTS "Users can update own profile" ON public.users;
 DROP POLICY IF EXISTS "Admins have full access to users" ON public.users;
@@ -30,7 +71,7 @@ DROP POLICY IF EXISTS "Admins have full access to settings" ON public.settings;
 DROP FUNCTION IF EXISTS is_admin() CASCADE;
 DROP FUNCTION IF EXISTS public.is_admin() CASCADE;
 
--- 2. ENABLE RLS ON ALL TABLES
+-- 3. ENABLE RLS ON ALL TABLES
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.services ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.categories ENABLE ROW LEVEL SECURITY;
@@ -39,7 +80,7 @@ ALTER TABLE public.transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.coupons ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
 
--- 3. HELPER FUNCTIONS
+-- 4. HELPER FUNCTIONS
 CREATE OR REPLACE FUNCTION public.is_admin() 
 RETURNS BOOLEAN AS $$
 BEGIN
@@ -51,7 +92,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 4. USERS TABLE POLICIES
+-- 5. USERS TABLE POLICIES
 -- Users can read their own profile
 CREATE POLICY "Users can view own profile" ON public.users
 FOR SELECT USING (auth.uid()::text = id::text);
@@ -68,7 +109,7 @@ WITH CHECK (
 CREATE POLICY "Admins have full access to users" ON public.users
 FOR ALL USING (public.is_admin());
 
--- 5. ORDERS TABLE POLICIES
+-- 6. ORDERS TABLE POLICIES
 -- Users can view their own orders
 CREATE POLICY "Users can view own orders" ON public.orders
 FOR SELECT USING (auth.uid()::text = "userId"::text);
@@ -81,7 +122,7 @@ FOR INSERT WITH CHECK (auth.uid()::text = "userId"::text);
 CREATE POLICY "Admins have full access to orders" ON public.orders
 FOR ALL USING (public.is_admin());
 
--- 6. TRANSACTIONS TABLE POLICIES
+-- 7. TRANSACTIONS TABLE POLICIES
 -- Users can view their own transactions
 CREATE POLICY "Users can view own transactions" ON public.transactions
 FOR SELECT USING (auth.uid()::text = "userId"::text);
@@ -90,7 +131,7 @@ FOR SELECT USING (auth.uid()::text = "userId"::text);
 CREATE POLICY "Admins have full access to transactions" ON public.transactions
 FOR ALL USING (public.is_admin());
 
--- 7. SERVICES & CATEGORIES (Public Read, Admin Write)
+-- 8. SERVICES & CATEGORIES (Public Read, Admin Write)
 CREATE POLICY "Public can view enabled services" ON public.services
 FOR SELECT USING (isEnabled = true OR public.is_admin());
 
@@ -103,14 +144,14 @@ FOR SELECT USING (isEnabled = true OR public.is_admin());
 CREATE POLICY "Admins have full access to categories" ON public.categories
 FOR ALL USING (public.is_admin());
 
--- 8. COUPONS (Public Read, Admin Write)
+-- 9. COUPONS (Public Read, Admin Write)
 CREATE POLICY "Public can view enabled coupons" ON public.coupons
 FOR SELECT USING (isEnabled = true OR public.is_admin());
 
 CREATE POLICY "Admins have full access to coupons" ON public.coupons
 FOR ALL USING (public.is_admin());
 
--- 9. SETTINGS (Public Read, Admin Write)
+-- 10. SETTINGS (Public Read, Admin Write)
 CREATE POLICY "Public can view settings" ON public.settings
 FOR SELECT USING (TRUE);
 

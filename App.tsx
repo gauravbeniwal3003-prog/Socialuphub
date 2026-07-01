@@ -175,7 +175,9 @@ const App: React.FC = () => {
               const fallbackMobile = session.user.user_metadata?.phone || "";
 
               // Sync user on the backend safely bypassing client-side RLS policies and race conditions
-              const response = await fetch('/api/sync-user', {
+              const backendBase = config?.renderBackendUrl?.trim() || '';
+              const syncUrl = backendBase ? `${backendBase.replace(/\/$/, "")}/api/sync-user` : '/api/sync-user';
+              const response = await fetch(syncUrl, {
                   method: 'POST',
                   headers: {
                       'Content-Type': 'application/json',
