@@ -276,10 +276,10 @@ const App: React.FC = () => {
     };
     window.addEventListener('message', handleMessage);
 
-    // 3. Initial session check
-    supabase.auth.getSession().then(({ data: { session } }) => {
-        handleSession(session);
-    });
+//    // 3. Initial session check
+//    supabase.auth.getSession().then(({ data: { session } }) => {
+//        handleSession(session);
+//    });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
         handleSession(session);
@@ -292,7 +292,7 @@ const App: React.FC = () => {
   }, []);
 
   const login = async (identifier: string, pass: string) => {
-    let email = identifier;
+    let email = identifier.trim();
     const isMobile = /^\d{10}$/.test(identifier);
 
     if (isMobile) {
@@ -336,9 +336,9 @@ const App: React.FC = () => {
         `width=${width},height=${height},left=${left},top=${top}`
       );
 
-      // If the popup was blocked by a popup blocker, fallback to direct redirect
+      // If the popup was blocked by a popup blocker, inform the user
       if (!popup) {
-        window.location.assign(data.url);
+        setSyncError("Popup blocked by browser. Please allow popups or open this app in a new tab to use Google Login.");
       }
     }
   };
@@ -352,7 +352,7 @@ const App: React.FC = () => {
     
     // Pass metadata so the DB Trigger can populate fields immediately
     const { data, error } = await supabase.auth.signUp({
-        email,
+        email: email.trim(),
         password: pass,
         options: {
             data: { 
@@ -389,8 +389,6 @@ const App: React.FC = () => {
     const [mode, setMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
     const [error, setError] = useState(syncError || '');
     const [loading, setLoading] = useState(false);
-    const [hp, setHp] = useState(''); // Honeypot field
-    const [startTime] = useState(Date.now()); // Track form load time
 
     useEffect(() => {
         if (syncError) {
@@ -414,13 +412,6 @@ const App: React.FC = () => {
     const handleSubmit = async (e: React.FormEvent) => {
       e.preventDefault(); 
       
-      // BOT DETECTION
-      if (hp) return; // Honeypot filled
-      if (Date.now() - startTime < 2000) {
-          setError("Please wait a moment before submitting.");
-          return;
-      }
-
       setError(''); setLoading(true);
       try { 
           if (mode === 'REGISTER') {
@@ -444,10 +435,6 @@ const App: React.FC = () => {
             </div>
             <h2 className="text-2xl font-black mb-6 text-center text-[var(--app-text)]">{mode === 'LOGIN' ? 'Welcome Back' : 'Create Account'}</h2>
             <form onSubmit={handleSubmit} className="space-y-4">
-               {/* Honeypot field (hidden from users) */}
-               <div className="hidden" aria-hidden="true">
-                   <input type="text" value={hp} onChange={e => setHp(e.target.value)} tabIndex={-1} autoComplete="off" />
-               </div>
                {mode === 'REGISTER' && (
                    <>
                        <input className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl p-3.5 text-[var(--app-text)] placeholder-[var(--app-text-muted)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)] outline-none transition-all text-sm font-medium" placeholder="Full Name" value={name} onChange={e => setName(e.target.value)} required />

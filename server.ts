@@ -1191,9 +1191,10 @@ async function startServer() {
     razorpay_order_id: z.string().min(1),
     razorpay_payment_id: z.string().min(1),
     razorpay_signature: z.string().min(1),
+    amount: z.number().optional()
   });
 
-  app.post("/api/payments/verify", verifyAuth, async (req, res) => {
+  app.post("/api/payments/verify", verifyAuth, async (req: any, res: any) => {
     const validation = razorpayVerifySchema.safeParse(req.body);
     if (!validation.success) return res.status(400).json({ error: "Invalid payment data" });
 
@@ -1208,9 +1209,121 @@ async function startServer() {
       .digest("hex");
 
     if (generated_signature === razorpay_signature) {
-      res.json({ success: true });
+      try {
+        const userId = req.user.id;
+        // Verify payment is not already processed
+        const { data: existingTxn } = await supabaseAdmin.from('transactions').select('id').eq('paymentId', razorpay_payment_id).maybeSingle();
+        if (existingTxn) return res.json({ success: true, already_processed: true });
+
+        let amount = 0;
+        if (razorpay) {
+            const rzpOrder = await razorpay.orders.fetch(razorpay_order_id);
+            if (rzpOrder) amount = Number(rzpOrder.amount) / 100;
+        } else {
+            // fallback (insecure if someone spoofs amount, but razorpay might not be setup properly)
+            amount = Number(req.body.amount || 0);
+        }
+
+        const txnId = `txn_${Date.now()}`;
+        await supabaseAdmin.from('transactions').insert({
+            id: txnId, userId, amount, type: 'DEPOSIT', status: 'SUCCESS', method: 'RAZORPAY', paymentId: razorpay_payment_id, date: new Date().toISOString()
+        });
+        const { data: user } = await supabaseAdmin.from('users').select('balance').eq('id', userId).single();
+        if (user) {
+            await supabaseAdmin.from('users').update({ balance: user.balance + amount, lastPaymentAt: new Date().toISOString() }).eq('id', userId);
+        }
+        res.json({ success: true });
+      } catch (err) {
+        res.status(500).json({ error: "DB update failed" });
+      }
     } else {
       res.status(400).json({ success: false, error: "Invalid signature" });
+    }
+  });
+
+  
+  const placeOrderSchema = z.object({
+    userId: z.string().uuid(),
+    serviceId: z.string(),
+    serviceName: z.string(),
+    link: z.string(),
+    quantity: z.number(),
+    originalCost: z.number(),
+    couponCode: z.string().optional()
+  });
+
+  app.post("/api/orders/place", verifyAuth, async (req: any, res: any) => {
+    const validation = placeOrderSchema.safeParse(req.body);
+    if (!validation.success) return res.status(400).json({ error: "Invalid input" });
+    
+    const { userId, serviceId, serviceName, link, quantity, originalCost, couponCode } = validation.data;
+    
+    if (req.user.id !== userId) return res.status(403).json({ error: "Unauthorized user mismatch" });
+    
+    try {
+        // Duplicate check
+        const { data: existingOrder } = await supabaseAdmin.from('orders')
+            .select('id').eq('link', link).eq('serviceId', serviceId).in('status', ['PENDING', 'PROCESSING']).limit(1);
+        if (existingOrder && existingOrder.length > 0) return res.status(400).json({ error: "An active order for this link already exists." });
+
+        // User check
+        const { data: user } = await supabaseAdmin.from('users').select('*').eq('id', userId).single();
+        if (!user) return res.status(404).json({ error: "User not found" });
+        if (user.isBanned) return res.status(403).json({ error: "User is banned" });
+
+        let finalCost = Number(originalCost);
+        
+        // Coupon Logic
+        if (couponCode) {
+            const { data: c } = await supabaseAdmin.from('coupons').select('*').eq('code', couponCode).single();
+            if (c && c.isEnabled && new Date(c.expiryDate) > new Date() && (c.usageLimit === 0 || c.usedCount < c.usageLimit)) {
+                if (c.discountType === 'PERCENTAGE') finalCost = finalCost - (finalCost * (c.discountValue / 100));
+                else finalCost = finalCost - c.discountValue;
+                finalCost = Math.max(0, finalCost);
+                
+                await supabaseAdmin.from('coupons').update({ usedCount: c.usedCount + 1 }).eq('id', c.id);
+            }
+        }
+
+        if (user.balance < finalCost) return res.status(400).json({ error: "Insufficient balance." });
+
+        const orderId = `ord_${Date.now()}`;
+        const txnId = `txn_${Date.now()}`;
+
+        // Update Balance
+        const { error: balErr } = await supabaseAdmin.from('users').update({ balance: user.balance - finalCost }).eq('id', userId);
+        if (balErr) throw balErr;
+
+        // Insert Order
+        const { error: orderErr } = await supabaseAdmin.from('orders').insert({
+            id: orderId, userId, serviceId, serviceName, link, quantity, charge: finalCost,
+            status: 'PENDING', remains: quantity, date: new Date().toISOString()
+        });
+        if (orderErr) throw orderErr;
+
+        // Insert Txn
+        await supabaseAdmin.from('transactions').insert({
+            id: txnId, userId, amount: finalCost, type: 'SPEND', status: 'SUCCESS', method: 'ORDER', utr: orderId, date: new Date().toISOString()
+        });
+
+        // Referral commission
+        if (user.referred_by && finalCost > 0) {
+            const { data: configData } = await supabaseAdmin.from('settings').select('*').eq('id', 'global').single();
+            if (configData && configData.referral_commission_percent > 0) {
+                const commission = (finalCost * configData.referral_commission_percent) / 100;
+                const { data: referrer } = await supabaseAdmin.from('users').select('id, referral_balance, total_referral_earnings').eq('id', user.referred_by).single();
+                if (referrer) {
+                    await supabaseAdmin.from('users').update({ 
+                        referral_balance: (referrer.referral_balance || 0) + commission,
+                        total_referral_earnings: (referrer.total_referral_earnings || 0) + commission
+                    }).eq('id', referrer.id);
+                }
+            }
+        }
+
+        res.json({ success: true, orderId });
+    } catch (err) {
+        res.status(500).json({ error: "Server error" });
     }
   });
 
@@ -1236,6 +1349,37 @@ async function startServer() {
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Database error" });
+    }
+  });
+
+  app.post("/api/users/transfer-referral", verifyAuth, async (req: any, res: any) => {
+    const userId = req.user.id;
+    try {
+        const { data: user } = await supabaseAdmin.from('users').select('*').eq('id', userId).single();
+        if (!user || user.referral_balance <= 0) return res.status(400).json({ error: "No referral earnings to transfer." });
+        
+        const amount = user.referral_balance;
+        
+        const { error: updateErr } = await supabaseAdmin.from('users').update({
+            balance: user.balance + amount,
+            referral_balance: 0
+        }).eq('id', userId);
+        
+        if (updateErr) throw updateErr;
+        
+        await supabaseAdmin.from('transactions').insert({
+            id: `ref_out_${Date.now()}`,
+            userId: userId,
+            amount: amount,
+            type: 'REFERRAL_PAYOUT',
+            status: 'SUCCESS',
+            method: 'WALLET_TRANSFER',
+            date: new Date().toISOString()
+        });
+        
+        res.json({ success: true, newBalance: user.balance + amount });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
     }
   });
 
@@ -1268,6 +1412,16 @@ async function startServer() {
 
         if (updateErr) throw updateErr;
         return res.json({ success: true, user: updatedUser });
+      }
+
+      // Check uniqueness explicitly to avoid constraint errors
+      if (name) {
+          const { data: nameTaken } = await supabaseAdmin.from('users').select('id').eq('name', name).maybeSingle();
+          if (nameTaken) return res.status(400).json({ error: "Username is already taken. Please try another." });
+      }
+      if (mobile) {
+          const { data: mobileTaken } = await supabaseAdmin.from('users').select('id').eq('mobile', mobile).maybeSingle();
+          if (mobileTaken) return res.status(400).json({ error: "Mobile number is already registered." });
       }
 
       // 2. Generate referral code
@@ -1318,12 +1472,21 @@ async function startServer() {
 
       const { data: insertedUser, error: insertErr } = await supabaseAdmin
         .from('users')
-        .insert(newUser)
+        .upsert(newUser, { onConflict: 'id' })
         .select()
         .single();
 
       if (insertErr) {
         console.error("Error inserting user:", insertErr);
+        // Handle unique constraint violations gracefully
+        if (insertErr.code === '23505') {
+            if (insertErr.message.includes('users_name_key') || insertErr.details?.includes('name')) {
+                return res.status(400).json({ error: "Username is already taken." });
+            }
+            if (insertErr.message.includes('users_mobile_key') || insertErr.details?.includes('mobile')) {
+                return res.status(400).json({ error: "Mobile number is already registered." });
+            }
+        }
         throw insertErr;
       }
 

@@ -296,31 +296,24 @@ export const useStore = <T>(key: string, getter: () => T) => {
 
 export const transferReferralBalance = async (userId: string) => {
     try {
-        const { data: user } = await supabase.from('users').select('*').eq('id', userId).single();
-        if (!user || user.referral_balance <= 0) throw new Error("No referral earnings to transfer.");
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) throw new Error("Not authenticated");
 
-        const amount = user.referral_balance;
+        const backendBase = getRenderBackendUrl();
+        const urlObj = backendBase ? `${backendBase.replace(/\/$/, "")}/api/users/transfer-referral` : "/api/users/transfer-referral";
         
-        // Atomic update (Simulated here, ideally RPC)
-        await supabase.from('users').update({
-            balance: safeFloat(user.balance + amount),
-            referral_balance: 0
-        }).eq('id', userId);
-
-        await supabase.from('transactions').insert({
-            id: `ref_out_${Date.now()}`,
-            userId: userId,
-            amount: amount,
-            type: 'REFERRAL_PAYOUT',
-            status: 'SUCCESS',
-            method: 'WALLET_TRANSFER',
-            date: getISTTime()
+        const response = await fetch(urlObj, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${session.access_token}` }
         });
+        
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Transfer failed");
 
         invalidateCache(['suh_cache_users', 'suh_cache_transactions']);
-        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('force_balance_update', { detail: { balance: safeFloat(user.balance + amount) } }));
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('force_balance_update', { detail: { balance: data.newBalance } }));
 
-        return amount;
+        return data.newBalance;
     } catch (e: any) { throw new Error(e.message); }
 };
 
@@ -598,114 +591,42 @@ export const processOrderQueue = async () => {
 export const placeOrder = async (userId: string, serviceId: string, serviceName: string, link: string, quantity: number, originalCost: number, couponCode?: string) => {
   checkRateLimit('place_order');
   if (!isValidUrl(link)) throw new Error("Invalid Link.");
-  
-  // --- DUPLICATE CHECK ---
-  const { data: existingOrder } = await supabase.from('orders')
-      .select('id')
-      .eq('link', link)
-      .eq('serviceId', serviceId)
-      .in('status', [OrderStatus.PENDING, OrderStatus.PROCESSING])
-      .limit(1);
-  
-  if (existingOrder && existingOrder.length > 0) {
-      throw new Error("An active order for this link already exists. Please wait for it to complete.");
-  }
-  // --- END DUPLICATE CHECK ---
 
   try {
       const user = await checkUserSecurity(userId);
-      let finalCost = safeFloat(originalCost);
-      let appliedCode = null;
 
-      if (couponCode) {
-          const { data: c } = await supabase.from('coupons').select('*').eq('code', couponCode).single();
-          if (c && c.isEnabled) {
-             if (c.category !== 'ORDER') throw new Error("Coupon valid for deposits only.");
-             if (originalCost < c.minAmount) throw new Error(`Min order amount: ${CURRENCY_SYMBOL}${c.minAmount}`);
-             if (c.expiryDate && new Date() > new Date(c.expiryDate)) throw new Error("Coupon expired.");
-
-             const usedBy = c.usedBy || [];
-             if (c.usageLimit > 0 && usedBy.filter((id: string) => id === userId).length >= c.usageLimit) {
-                 throw new Error("Coupon usage limit reached.");
-             }
-             
-             finalCost = Math.max(0, safeFloat(finalCost - (c.type === 'PERCENTAGE' ? (finalCost * c.value)/100 : c.value)));
-             appliedCode = couponCode;
-             await supabase.from('coupons').update({ usedBy: [...usedBy, userId] }).eq('code', couponCode);
-          } else {
-              throw new Error("Invalid coupon.");
-          }
-      }
-
-      if (user.balance < finalCost) throw new Error("Insufficient Balance");
-
-      const orderId = `ord_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-      const orderData: Order = {
-          id: orderId, userId, serviceId, serviceName, link, quantity, 
-          charge: finalCost, originalCharge: originalCost, couponCode: appliedCode,
-          start_count: 0, status: OrderStatus.PENDING, 
-          date: getISTTime(),
-          externalId: null as any // Explicitly null for DB
-      };
-
-      // 1. DEDUCT BALANCE
-      const { error: balErr } = await supabase.from('users').update({ 
-          balance: safeFloat(user.balance - finalCost),
-          totalSpent: safeFloat((user.totalSpent||0) + finalCost) 
-      }).eq('id', userId);
+      const { data: { session } } = await supabase.auth.getSession();
+      const backendBase = getRenderBackendUrl();
+      const urlObj = backendBase ? `${backendBase.replace(/\/$/, "")}/api/orders/place` : "/api/orders/place";
       
-      if (balErr) throw new Error("Balance update failed");
-
-      // --- NEW LIFETIME REFERRAL COMMISSION LOGIC ---
-      if (user.referred_by && finalCost > 0) {
-          const { data: configData } = await supabase.from('settings').select('*').eq('id', 'global').single();
-          const commissionPercent = configData?.referralDepositBonus || 5; // Using existing setting name (DepositBonus) for commission %
-          const commission = safeFloat((finalCost * commissionPercent) / 100);
-
-          if (commission > 0) {
-              const { data: referrer } = await supabase.from('users').select('id, referral_balance, total_referral_earnings').eq('id', user.referred_by).single();
-              if (referrer) {
-                  await supabase.from('users').update({
-                      referral_balance: safeFloat((referrer.referral_balance || 0) + commission),
-                      total_referral_earnings: safeFloat((referrer.total_referral_earnings || 0) + commission)
-                  }).eq('id', referrer.id);
-
-                  await supabase.from('transactions').insert({
-                      id: `comm_${Date.now()}`,
-                      userId: referrer.id,
-                      amount: commission,
-                      type: 'REFERRAL_COMMISSION',
-                      status: 'SUCCESS',
-                      method: 'SYSTEM',
-                      date: getISTTime(),
-                      utr: `Commission from ${user.name}`
-                  });
-              }
-          }
+      const response = await fetch(urlObj, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
+          body: JSON.stringify({ userId, serviceId, serviceName, link, quantity, originalCost, couponCode })
+      });
+      
+      if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(errData.error || "Order placement failed");
       }
-      // --- END OF NEW LOGIC ---
-
-      // 2. SAVE ORDER LOCALLY (PENDING state, No External ID)
-      await supabase.from('orders').insert(orderData);
-
-      await cleanupUserHistory('orders', userId, 'date', 20);
-
-      // 3. TRIGGER QUEUE PROCESSING (NON-BLOCKING)
-      // We do not await this. The UI returns success immediately.
-      processOrderQueue().catch(console.error);
-
-      invalidateCache(['suh_cache_orders', 'suh_cache_users']); 
-      return orderData;
-  } catch (e) { 
-      handleSupabaseError(e); 
+      
+      invalidateCache(['suh_cache_orders', 'suh_cache_users']);
+      
+      // Auto processing logic to queue the SMM api call
+      if (typeof window !== 'undefined') {
+          setTimeout(() => {
+              processOrderQueue().catch(console.error);
+          }, 100);
+      }
+  } catch (e: any) {
+      console.error(`Order Failed: ${serviceId}`, e.message);
+      throw e;
   }
 };
-
 export const handleRazorpaySuccess = async (userId: string, amount: number, paymentId: string, orderId?: string, signature?: string) => {
     try {
         const user = await checkUserSecurity(userId);
 
-        // --- SECURE BACKEND VERIFICATION ---
         if (orderId && signature) {
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) throw new Error("Authentication required for payment verification");
@@ -722,7 +643,8 @@ export const handleRazorpaySuccess = async (userId: string, amount: number, paym
                 body: JSON.stringify({
                     razorpay_order_id: orderId,
                     razorpay_payment_id: paymentId,
-                    razorpay_signature: signature
+                    razorpay_signature: signature,
+                    amount: amount
                 })
             });
 
@@ -730,29 +652,16 @@ export const handleRazorpaySuccess = async (userId: string, amount: number, paym
                 const errData = await response.json();
                 throw new Error(errData.error || "Payment verification failed");
             }
+        } else {
+           throw new Error("Missing payment verification data from Razorpay.");
         }
-        // --- END SECURE VERIFICATION ---
         
-        const txnId = `txn_${Date.now()}`;
-        const { error: txnError } = await supabase.from('transactions').insert({ 
-            id: txnId, userId: userId, amount: amount, type: 'DEPOSIT', status: 'SUCCESS', method: 'RAZORPAY', paymentId: paymentId, date: getISTTime(),
-        });
-
-        if (txnError) throw new Error("Log Failed");
-
-        const newBalance = safeFloat(user.balance + amount);
-        const { error: balError } = await supabase.from('users').update({ balance: newBalance, lastPaymentAt: getISTTime() }).eq('id', userId);
-
-        if (balError) {
-             await supabase.from('transactions').update({ status: 'FAILED' }).eq('id', txnId);
-             throw new Error("Balance Update Failed");
-        }
-
-        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('force_balance_update', { detail: { balance: newBalance } }));
         invalidateCache(['suh_cache_users', 'suh_cache_transactions']);
-        await cleanupUserHistory('transactions', userId, 'date', 10);
         return "SUCCESS";
-    } catch (e: any) { throw new Error(e.message); }
+    } catch (e: any) { 
+        console.error(`Razorpay Error ${userId}`, e.message);
+        throw new Error(e.message); 
+    }
 };
 
 // ... Rest of the exports are simple wrappers ...
