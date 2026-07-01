@@ -185,24 +185,86 @@ const App: React.FC = () => {
               const fallbackMobile = session.user.user_metadata?.phone || "";
 
               // Sync user on the backend safely bypassing client-side RLS policies and race conditions
-              const backendUrl = config?.renderBackendUrl?.trim() || '';
+              const isLocalOrAiStudio = typeof window !== 'undefined' && (
+                  window.location.hostname.includes('run.app') || 
+                  window.location.hostname.includes('localhost') || 
+                  window.location.hostname.includes('127.0.0.1') ||
+                  window.location.hostname.includes('aistudio')
+              );
+              
+              const backendUrl = isLocalOrAiStudio ? '' : (config?.renderBackendUrl?.trim() || '');
               const baseUrl = backendUrl ? backendUrl.replace(/\/$/, '') : '';
               const syncUrl = `${baseUrl}/api/sync-user`;
               
               console.log(`[Auth Sync] Syncing user profile via: ${syncUrl}`);
 
-              const response = await fetch(syncUrl, {
-                  method: 'POST',
-                  headers: {
-                      'Content-Type': 'application/json',
-                      'Authorization': `Bearer ${session.access_token}`
-                  },
-                  body: JSON.stringify({
-                      name: fallbackName,
-                      mobile: fallbackMobile,
-                      referredByCode
-                  })
-              });
+              let response;
+              let usedBackup = false;
+
+              try {
+                  response = await fetch(syncUrl, {
+                      method: 'POST',
+                      headers: {
+                          'Content-Type': 'application/json',
+                          'Authorization': `Bearer ${session.access_token}`
+                      },
+                      body: JSON.stringify({
+                          name: fallbackName,
+                          mobile: fallbackMobile,
+                          referredByCode
+                      })
+                  });
+              } catch (fetchErr: any) {
+                  if (backendUrl) {
+                      console.warn(`[Auth Sync] Syncing with custom backend URL failed: ${fetchErr.message}. Falling back to local container backend...`);
+                      response = await fetch('/api/sync-user', {
+                          method: 'POST',
+                          headers: {
+                              'Content-Type': 'application/json',
+                              'Authorization': `Bearer ${session.access_token}`
+                          },
+                          body: JSON.stringify({
+                              name: fallbackName,
+                              mobile: fallbackMobile,
+                              referredByCode
+                          })
+                      });
+                      usedBackup = true;
+                  } else {
+                      throw fetchErr;
+                  }
+              }
+
+              // Double-check if we got an error or HTML response from a custom backendUrl, and automatically fall back to local if so
+              if (backendUrl && !usedBackup) {
+                  const contentType = response.headers.get("content-type") || "";
+                  if (!response.ok || !contentType.includes("application/json")) {
+                      console.warn(`[Auth Sync] Custom backendUrl returned invalid status or non-JSON. Falling back to local container backend...`);
+                      try {
+                          const fallbackResponse = await fetch('/api/sync-user', {
+                              method: 'POST',
+                              headers: {
+                                  'Content-Type': 'application/json',
+                                  'Authorization': `Bearer ${session.access_token}`
+                              },
+                              body: JSON.stringify({
+                                  name: fallbackName,
+                                  mobile: fallbackMobile,
+                                  referredByCode
+                              })
+                          });
+                          if (fallbackResponse.ok) {
+                              const fallbackContentType = fallbackResponse.headers.get("content-type") || "";
+                              if (fallbackContentType.includes("application/json")) {
+                                  response = fallbackResponse;
+                                  usedBackup = true;
+                              }
+                          }
+                      } catch (fallbackErr) {
+                          console.error("[Auth Sync] Local container backend fallback failed:", fallbackErr);
+                      }
+                  }
+              }
 
               if (!response.ok) {
                   const contentType = response.headers.get("content-type") || "";

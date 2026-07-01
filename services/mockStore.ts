@@ -365,6 +365,15 @@ export const updateConfig = async (newConfig: Partial<GlobalConfig>) => {
 
 // Helper to dynamically get Render Backend URL from local cache
 const getRenderBackendUrl = (): string => {
+    // If running in the local environment or AI Studio preview container, always use local relative URLs.
+    // This prevents API calls from trying to route to production backend URLs that may be misconfigured or unreachable.
+    if (typeof window !== 'undefined') {
+        const hostname = window.location.hostname;
+        if (hostname.includes('run.app') || hostname.includes('localhost') || hostname.includes('127.0.0.1') || hostname.includes('aistudio')) {
+            console.log(`[Environment Detect] Running on ${hostname}. Forcing local relative backend proxy.`);
+            return '';
+        }
+    }
     try {
         const cached = getFromCacheSync<GlobalConfig>('suh_cache_config');
         if (cached && cached.renderBackendUrl) {
