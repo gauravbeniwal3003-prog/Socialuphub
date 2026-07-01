@@ -732,30 +732,67 @@ async function startServer() {
 
   // --- AUTH MIDDLEWARE ---
   const verifyAuth = async (req: any, res: any, next: any) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
 
-    const token = authHeader.split(' ')[1];
-    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+      const parts = authHeader.split(' ');
+      if (parts.length !== 2 || parts[0].toLowerCase() !== 'bearer') {
+        return res.status(401).json({ error: "Invalid authorization header format" });
+      }
 
-    if (error || !user) return res.status(401).json({ error: "Invalid session" });
-    req.user = user;
-    next();
+      const token = parts[1];
+      if (!token || token === "null" || token === "undefined") {
+        return res.status(401).json({ error: "Empty or invalid token" });
+      }
+
+      if (!supabaseAdmin) {
+        console.error("[verifyAuth] supabaseAdmin is not initialized.");
+        return res.status(500).json({ error: "Server authentication configuration error" });
+      }
+
+      const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+
+      if (error || !user) {
+        console.warn("[verifyAuth] Auth check failed:", error?.message || "User not found");
+        return res.status(401).json({ error: "Invalid session", details: error?.message });
+      }
+
+      req.user = user;
+      next();
+    } catch (err: any) {
+      console.error("[verifyAuth] Critical error in middleware:", err.message || err);
+      return res.status(401).json({ error: "Authentication failed", message: err.message });
+    }
   };
 
   const verifyAdmin = async (req: any, res: any, next: any) => {
-    await verifyAuth(req, res, async () => {
-      const { data: profile } = await supabaseAdmin
-        .from('users')
-        .select('role')
-        .eq('id', req.user.id)
-        .single();
+    try {
+      await verifyAuth(req, res, async () => {
+        try {
+          if (!supabaseAdmin) {
+            return res.status(500).json({ error: "Server database configuration error" });
+          }
 
-      if (profile?.role !== 'ADMIN') {
-        return res.status(403).json({ error: "Admin access required" });
-      }
-      next();
-    });
+          const { data: profile } = await supabaseAdmin
+            .from('users')
+            .select('role')
+            .eq('id', req.user.id)
+            .single();
+
+          if (profile?.role !== 'ADMIN') {
+            return res.status(403).json({ error: "Admin access required" });
+          }
+          next();
+        } catch (dbErr: any) {
+          console.error("[verifyAdmin] Database check failed:", dbErr.message || dbErr);
+          return res.status(500).json({ error: "Database verification failed" });
+        }
+      });
+    } catch (err: any) {
+      console.error("[verifyAdmin] Critical error in middleware:", err.message || err);
+      return res.status(500).json({ error: "Admin verification failed" });
+    }
   };
 
   // --- USER PLATFORM SMM API ENDPOINT ---

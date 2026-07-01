@@ -189,8 +189,22 @@ const App: React.FC = () => {
               });
 
               if (!response.ok) {
-                  const errData = await response.json().catch(() => ({}));
-                  throw new Error(errData.error || `HTTP ${response.status}`);
+                  const contentType = response.headers.get("content-type") || "";
+                  if (contentType.includes("application/json")) {
+                      const errData = await response.json().catch(() => ({}));
+                      throw new Error(errData.error || `HTTP ${response.status}`);
+                  } else {
+                      const textBody = await response.text();
+                      console.error(`HTTP ${response.status} Error - Expected JSON from /api/sync-user, but received HTML/text:`, textBody.substring(0, 500));
+                      throw new Error(`HTTP ${response.status}: Server Error`);
+                  }
+              }
+
+              const contentType = response.headers.get("content-type") || "";
+              if (!contentType.includes("application/json")) {
+                  const textBody = await response.text();
+                  console.error("Expected JSON response from /api/sync-user, but received HTML/text:", textBody.substring(0, 500));
+                  throw new Error("Server returned an invalid HTML response instead of JSON data.");
               }
 
               const data = await response.json();
