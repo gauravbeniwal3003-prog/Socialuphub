@@ -185,7 +185,13 @@ const App: React.FC = () => {
               const fallbackMobile = session.user.user_metadata?.phone || "";
 
               // Sync user on the backend safely bypassing client-side RLS policies and race conditions
-              const response = await fetch('/api/sync-user', {
+              const backendUrl = config?.renderBackendUrl?.trim() || '';
+              const baseUrl = backendUrl ? backendUrl.replace(/\/$/, '') : '';
+              const syncUrl = `${baseUrl}/api/sync-user`;
+              
+              console.log(`[Auth Sync] Syncing user profile via: ${syncUrl}`);
+
+              const response = await fetch(syncUrl, {
                   method: 'POST',
                   headers: {
                       'Content-Type': 'application/json',
@@ -338,6 +344,13 @@ const App: React.FC = () => {
             } else if (session) {
               handleSession(session);
             }
+          }).catch(err => {
+              console.error("Critical error in setSession:", err);
+              setSyncError(err.message || "Failed to set session.");
+              setSyncErrorDetails({
+                message: err.message || "Set session crash",
+                hint: "A critical JS runtime error occurred while passing OAuth tokens to Supabase client library. This may happen if the library fails to parse an HTML error page."
+              });
           });
         } else if (code) {
           console.log("Exchanging code for session in opener window from popup callback...");
@@ -352,6 +365,13 @@ const App: React.FC = () => {
             } else if (session) {
               handleSession(session);
             }
+          }).catch(err => {
+              console.error("Critical error in exchangeCodeForSession:", err);
+              setSyncError(err.message || "Code exchange failed");
+              setSyncErrorDetails({
+                message: err.message || "Code exchange crash",
+                hint: "A critical JS runtime error occurred while exchanging the authorization code. This typically happens if the Supabase server is offline or returned HTML instead of JSON."
+              });
           });
         } else {
           // Fallback to checking current session
@@ -376,22 +396,36 @@ const App: React.FC = () => {
         access_token: accessToken,
         refresh_token: refreshToken
       }).then(({ data: { session }, error }) => {
-        if (session) {
+        if (error) {
+          console.error("Startup setSession error:", error.message);
+          setSyncError("Startup setSession error: " + error.message);
+        } else if (session) {
           handleSession(session);
           window.history.replaceState({}, document.title, window.location.pathname);
         }
+      }).catch(err => {
+         console.error("Startup setSession critical error:", err);
+         setSyncError(err.message || "Startup session establishment failed");
       });
     } else if (code) {
       console.log("Startup: Exchanging URL code for session...");
       supabase.auth.exchangeCodeForSession(code).then(({ data: { session }, error }) => {
-        if (session) {
+        if (error) {
+          console.error("Startup exchangeCodeForSession error:", error.message);
+          setSyncError("Startup code exchange error: " + error.message);
+        } else if (session) {
           handleSession(session);
           window.history.replaceState({}, document.title, window.location.pathname);
         }
+      }).catch(err => {
+         console.error("Startup exchangeCodeForSession critical error:", err);
+         setSyncError(err.message || "Startup code exchange failed");
       });
     } else {
       supabase.auth.getSession().then(({ data: { session } }) => {
           handleSession(session);
+      }).catch(err => {
+          console.error("Startup getSession failed:", err);
       });
     }
 
