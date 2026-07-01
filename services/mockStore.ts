@@ -157,7 +157,8 @@ const initialConfig: GlobalConfig = {
     referralDepositBonus: 5.0, // Default 5%
     referralMinDeposit: 10.0,
     isReferralSystemEnabled: true,
-    landingVideoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    landingVideoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    renderBackendUrl: "https://socialuphub-backend.onrender.com"
 };
 
 // --- CACHING SYSTEM ---
@@ -270,9 +271,15 @@ export const useStore = <T>(key: string, getter: () => T) => {
         }
         else if (key === 'suh_config') {
             const { data } = await supabase.from('settings').select('*').eq('id', 'global').single();
-            if (data && active) {
-                saveToCache(cacheKey, data);
-                setData(data as any);
+            if (active) {
+                const merged = {
+                    ...initialConfig,
+                    ...(data || {}),
+                    renderBackendUrl: data?.renderBackendUrl?.trim() || initialConfig.renderBackendUrl,
+                    landingVideoUrl: data?.landingVideoUrl?.trim() || initialConfig.landingVideoUrl
+                };
+                saveToCache(cacheKey, merged);
+                setData(merged as any);
             }
         }
     };
@@ -366,7 +373,7 @@ const getRenderBackendUrl = (): string => {
     } catch (e) {
         console.warn("Could not retrieve cached backend URL:", e);
     }
-    return '';
+    return 'https://socialuphub-backend.onrender.com';
 };
 
 // --- UPDATED API CALLER USING SECURE BACKEND PROXY ---
