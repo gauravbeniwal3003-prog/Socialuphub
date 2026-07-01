@@ -595,22 +595,35 @@ async function startServer() {
 
   // API Request Logger & JSON content-type protection middleware
   app.use("/api", (req: any, res: any, next: any) => {
-    console.log(`[API Request] ${req.method} ${req.originalUrl}`);
-    
+    const logMsg = `[${new Date().toISOString()}] [API Request] ${req.method} ${req.originalUrl} - Headers: ${JSON.stringify(req.headers)}`;
+    console.log(logMsg);
+    try {
+      fs.appendFileSync(path.join(process.cwd(), "api_requests.log"), logMsg + "\n", "utf8");
+    } catch (e) {}
+
     // Intercept response send to detect if any route accidentally returns HTML instead of JSON
     const oldSend = res.send;
     res.send = function(data: any) {
-      console.log(`[API Response] ${req.method} ${req.originalUrl} - Status: ${res.statusCode} - Content-Type: ${res.get('Content-Type')}`);
+      const resMsg = `[${new Date().toISOString()}] [API Response] ${req.method} ${req.originalUrl} - Status: ${res.statusCode} - Content-Type: ${res.get('Content-Type')}`;
+      console.log(resMsg);
+      try {
+        fs.appendFileSync(path.join(process.cwd(), "api_requests.log"), resMsg + "\n", "utf8");
+      } catch (e) {}
+
       if (typeof data === 'string' && (data.trim().startsWith('<!DOCTYPE html>') || data.trim().startsWith('<html'))) {
         console.warn(`[API Response WARNING] HTML returned for API endpoint: ${req.originalUrl}`);
         // Automatically overwrite HTML with JSON error to guarantee we never leak HTML to a fetch call
         res.setHeader('Content-Type', 'application/json');
-        return oldSend.call(res, JSON.stringify({
+        const modifiedData = JSON.stringify({
           error: "API endpoint returned HTML instead of JSON data",
           hint: "The request reached the server but fell through or crashed, returning an HTML document. We intercepted it to provide this JSON diagnostics fallback.",
           statusCode: res.statusCode,
           url: req.originalUrl
-        }));
+        });
+        try {
+          fs.appendFileSync(path.join(process.cwd(), "api_requests.log"), `[${new Date().toISOString()}] [API Intercepted HTML] Overwrote with JSON fallback\n`, "utf8");
+        } catch (e) {}
+        return oldSend.call(res, modifiedData);
       }
       return oldSend.apply(res, arguments);
     };
@@ -1410,7 +1423,7 @@ async function startServer() {
   });
 
   // Synchronize/Create User Profile safely bypassing RLS
-  app.post("/api/sync-user", verifyAuth, async (req: any, res: any) => {
+  app.post(["/api/sync-user", "/api/sync-user/"], verifyAuth, async (req: any, res: any) => {
     try {
       if (!req.user) {
         return res.status(401).json({ error: "Unauthorized access: User session details not found." });
@@ -1541,7 +1554,7 @@ async function startServer() {
   });
 
   // Synchronize/Create User Profile safely bypassing RLS (GET fallback to return JSON instead of falling through to Vite HTML)
-  app.get("/api/sync-user", (req, res) => {
+  app.get(["/api/sync-user", "/api/sync-user/"], (req, res) => {
     res.status(405).json({
       error: "Method Not Allowed",
       hint: "The synchronization endpoint requires a POST request, but a GET request was received. This happens if the browser followed a 301/302 redirect (for example, due to a trailing slash mismatch or HTTP-to-HTTPS upgrade) which converted the POST request into a GET request."

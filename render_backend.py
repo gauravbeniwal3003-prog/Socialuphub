@@ -313,6 +313,7 @@ def verify_auth():
 
 # --- USER PROFILE SYNC ENDPOINT ---
 @app.route("/api/sync-user", methods=["POST", "GET"])
+@app.route("/api/sync-user/", methods=["POST", "GET"])
 def sync_user():
     if request.method == "GET":
         return jsonify({
@@ -758,6 +759,21 @@ def api_catch_all(path):
         "method": request.method,
         "hint": "The requested API endpoint is not registered on this Python backend, or the HTTP method is incorrect."
     }), 404
+
+# Global error handler to guarantee JSON outputs on crash
+@app.errorhandler(Exception)
+def handle_exception(e):
+    from werkzeug.exceptions import HTTPException
+    code = 500
+    if isinstance(e, HTTPException):
+        code = e.code
+    
+    logger.error(f"Global exception handler caught: {str(e)}")
+    return jsonify({
+        "error": getattr(e, "description", str(e)) or "Internal Server Error",
+        "details": str(e),
+        "hint": "Python Flask backend API crash prevention layer"
+    }), code
 
 # Initialize background tasks on server start
 start_threads()

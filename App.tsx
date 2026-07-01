@@ -200,26 +200,24 @@ const App: React.FC = () => {
               
               console.log(`[Auth Sync] Syncing user profile via: ${syncUrl}`);
 
-              let response;
-              let usedBackup = false;
+              const candidateUrls = [
+                  syncUrl,
+                  syncUrl.endsWith('/') ? syncUrl.slice(0, -1) : `${syncUrl}/`,
+                  '/api/sync-user',
+                  '/api/sync-user/'
+              ];
 
-              try {
-                  response = await fetch(syncUrl, {
-                      method: 'POST',
-                      headers: {
-                          'Content-Type': 'application/json',
-                          'Authorization': `Bearer ${session.access_token}`
-                      },
-                      body: JSON.stringify({
-                          name: fallbackName,
-                          mobile: fallbackMobile,
-                          referredByCode
-                      })
-                  });
-              } catch (fetchErr: any) {
-                  if (backendUrl) {
-                      console.warn(`[Auth Sync] Syncing with custom backend URL failed: ${fetchErr.message}. Falling back to local container backend...`);
-                      response = await fetch('/api/sync-user', {
+              // Filter unique URLs to avoid duplicate fetches
+              const uniqueUrls = Array.from(new Set(candidateUrls));
+              console.log("[Auth Sync] Unique candidate URLs to attempt:", uniqueUrls);
+
+              let response: Response | null = null;
+              let finalUrlUsed = "";
+
+              for (const url of uniqueUrls) {
+                  try {
+                      console.log(`[Auth Sync] Attempting fetch to: ${url}`);
+                      const res = await fetch(url, {
                           method: 'POST',
                           headers: {
                               'Content-Type': 'application/json',
@@ -231,41 +229,27 @@ const App: React.FC = () => {
                               referredByCode
                           })
                       });
-                      usedBackup = true;
-                  } else {
-                      throw fetchErr;
+
+                      const contentType = res.headers.get("content-type") || "";
+                      if (res.ok && contentType.includes("application/json")) {
+                          console.log(`[Auth Sync] Successfully synchronized via URL: ${url}`);
+                          response = res;
+                          finalUrlUsed = url;
+                          break;
+                      } else {
+                          console.warn(`[Auth Sync] URL ${url} returned status ${res.status} with content-type ${contentType}. Trying next candidate...`);
+                          if (!response) {
+                              response = res;
+                              finalUrlUsed = url;
+                          }
+                      }
+                  } catch (err: any) {
+                      console.warn(`[Auth Sync] Failed to fetch URL ${url}: ${err.message}. Trying next candidate...`);
                   }
               }
 
-              // Double-check if we got an error or HTML response from a custom backendUrl, and automatically fall back to local if so
-              if (backendUrl && !usedBackup) {
-                  const contentType = response.headers.get("content-type") || "";
-                  if (!response.ok || !contentType.includes("application/json")) {
-                      console.warn(`[Auth Sync] Custom backendUrl returned invalid status or non-JSON. Falling back to local container backend...`);
-                      try {
-                          const fallbackResponse = await fetch('/api/sync-user', {
-                              method: 'POST',
-                              headers: {
-                                  'Content-Type': 'application/json',
-                                  'Authorization': `Bearer ${session.access_token}`
-                              },
-                              body: JSON.stringify({
-                                  name: fallbackName,
-                                  mobile: fallbackMobile,
-                                  referredByCode
-                              })
-                          });
-                          if (fallbackResponse.ok) {
-                              const fallbackContentType = fallbackResponse.headers.get("content-type") || "";
-                              if (fallbackContentType.includes("application/json")) {
-                                  response = fallbackResponse;
-                                  usedBackup = true;
-                              }
-                          }
-                      } catch (fallbackErr) {
-                          console.error("[Auth Sync] Local container backend fallback failed:", fallbackErr);
-                      }
-                  }
+              if (!response) {
+                  throw new Error("All backend synchronization endpoints failed or returned unreachable network states.");
               }
 
               if (!response.ok) {
@@ -275,7 +259,7 @@ const App: React.FC = () => {
                       setSyncErrorDetails({
                           message: errData.error || `HTTP ${response.status}: Server Error`,
                           statusCode: response.status,
-                          url: '/api/sync-user',
+                          url: finalUrlUsed || '/api/sync-user',
                           contentType,
                           responseBody: JSON.stringify(errData, null, 2),
                           hint: "The backend server rejected the synchronization request. This usually means the authentication token is invalid or expired, or the database rejected user record creation."
@@ -284,11 +268,11 @@ const App: React.FC = () => {
                       throw new Error(errData.error || `HTTP ${response.status}`);
                   } else {
                       const textBody = await response.text();
-                      console.error(`HTTP ${response.status} Error - Expected JSON from /api/sync-user, but received HTML/text:`, textBody.substring(0, 500));
+                      console.error(`HTTP ${response.status} Error - Expected JSON from ${finalUrlUsed}, but received HTML/text:`, textBody.substring(0, 500));
                       setSyncErrorDetails({
                           message: `HTTP ${response.status}: Server Error`,
                           statusCode: response.status,
-                          url: '/api/sync-user',
+                          url: finalUrlUsed || '/api/sync-user',
                           contentType,
                           responseBody: textBody,
                           hint: "The backend server returned an HTML page instead of JSON. This typically indicates an Express crash, routing issue, or reverse-proxy error (e.g. 502 Bad Gateway)."
