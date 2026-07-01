@@ -86,6 +86,7 @@ export const useAuth = () => useContext(AuthContext);
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [view, setView] = useState<'LANDING' | 'DASHBOARD' | 'AUTH' | 'BANNED' | 'MAINTENANCE'>('LANDING');
   const [authLoading, setAuthLoading] = useState(true);
   const [banTimeRemaining, setBanTimeRemaining] = useState<string>('');
@@ -196,6 +197,7 @@ const App: React.FC = () => {
               if (data?.user) {
                   // If successfully synced, remove referral code from localStorage
                   localStorage.removeItem('pending_ref_code');
+                  setSyncError(null);
                   
                   const banStatus = checkBanStatus(data.user);
                   setUser({ ...data.user, id: session.user.id });
@@ -206,13 +208,16 @@ const App: React.FC = () => {
               }
           } catch (e: any) {
               console.error("Failed to sync user via server:", e.message || JSON.stringify(e));
+              setSyncError(e.message || "Failed to synchronize user profile");
               await supabase.auth.signOut();
               setUser(null);
-              setView('LANDING');
+              setView('AUTH');
           }
       } else {
           setUser(null);
-          setView('LANDING');
+          if (view !== 'AUTH' && view !== 'MAINTENANCE' && view !== 'BANNED') {
+              setView('LANDING');
+          }
       }
       setAuthLoading(false);
   };
@@ -230,7 +235,7 @@ const App: React.FC = () => {
       // are on the same domain, but this ensures it works in both dev and prod.
       setTimeout(() => {
         if (window.opener) {
-          window.opener.postMessage({ type: 'SUPABASE_AUTH_CALLBACK' }, '*');
+          window.opener.postMessage({ type: 'SUPABASE_AUTH_CALLBACK', hash: window.location.hash, search: window.location.search }, '*');
           window.close();
         }
       }, 1000);
@@ -243,9 +248,30 @@ const App: React.FC = () => {
       if (event.origin !== window.location.origin) return;
       
       if (event.data?.type === 'SUPABASE_AUTH_CALLBACK') {
-        supabase.auth.getSession().then(({ data: { session } }) => {
-          if (session) handleSession(session);
-        });
+        const hash = event.data?.hash || '';
+        const cleanHash = hash.startsWith('#') ? hash.substring(1) : hash;
+        const params = new URLSearchParams(cleanHash);
+        const accessToken = params.get('access_token');
+        const refreshToken = params.get('refresh_token');
+
+        if (accessToken && refreshToken) {
+          supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken
+          }).then(({ data: { session }, error }) => {
+            if (error) {
+              console.error("Failed to set session from popup parameters:", error.message);
+              setSyncError(error.message);
+            } else if (session) {
+              handleSession(session);
+            }
+          });
+        } else {
+          // Fallback to checking current session
+          supabase.auth.getSession().then(({ data: { session } }) => {
+            if (session) handleSession(session);
+          });
+        }
       }
     };
     window.addEventListener('message', handleMessage);
@@ -280,15 +306,17 @@ const App: React.FC = () => {
   };
 
   const loginWithGoogle = async (refCode?: string) => {
+    setSyncError(null);
     if (refCode) {
       localStorage.setItem('pending_ref_code', refCode);
     }
     const inIframe = window.self !== window.top;
+    const redirectUrl = `${window.location.origin}/auth/callback`;
     
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: window.location.origin,
+        redirectTo: redirectUrl,
         skipBrowserRedirect: inIframe, // Skip redirect only in iframe to handle popups
       }
     });
@@ -359,10 +387,16 @@ const App: React.FC = () => {
     const [mobile, setMobile] = useState('');
     const [refCode, setRefCode] = useState(''); // New State for Referral Code
     const [mode, setMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
-    const [error, setError] = useState('');
+    const [error, setError] = useState(syncError || '');
     const [loading, setLoading] = useState(false);
     const [hp, setHp] = useState(''); // Honeypot field
     const [startTime] = useState(Date.now()); // Track form load time
+
+    useEffect(() => {
+        if (syncError) {
+            setError(syncError);
+        }
+    }, [syncError]);
 
     // Auto-fill referral code from URL hash
     useEffect(() => {

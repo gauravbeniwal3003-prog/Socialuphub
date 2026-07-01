@@ -9,15 +9,52 @@ import { z } from "zod";
 import crypto from "crypto";
 import Razorpay from "razorpay";
 import axios from "axios";
+import fs from "fs";
 
 console.log("Starting server script...");
 
+// In-memory temporary error logging mechanism (lasts 1 hour)
+export interface ErrorLog {
+  timestamp: string;
+  message: string;
+  type: string;
+  details?: any;
+}
+
+export let tempErrorLogs: ErrorLog[] = [];
+
+export function logTempError(message: string, type: string = "ERROR", details?: any) {
+  try {
+    const now = new Date();
+    const oneHourAgo = now.getTime() - 60 * 60 * 1000;
+    
+    // Prune logs older than 1 hour
+    tempErrorLogs = tempErrorLogs.filter(log => new Date(log.timestamp).getTime() > oneHourAgo);
+    
+    tempErrorLogs.push({
+      timestamp: now.toISOString(),
+      message,
+      type,
+      details
+    });
+    
+    // Safety cap to avoid memory issues
+    if (tempErrorLogs.length > 500) {
+      tempErrorLogs.shift();
+    }
+  } catch (err) {
+    console.error("Failed to log temporary error in memory:", err);
+  }
+}
+
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
+  logTempError(`Uncaught Exception: ${err.message}`, "CRITICAL", { stack: err.stack });
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  logTempError(`Unhandled Rejection: ${String(reason)}`, "CRITICAL", { reason: String(reason) });
 });
 
 // Initialize Supabase Admin Client (Server-side only)
@@ -47,6 +84,344 @@ async function startServer() {
 
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  // Dedicated OAuth callback handler for Supabase popup auth.
+  // Serves a lightweight HTML page directly to bypass the iframe/static asset proxy blocks
+  // in the AI Studio preview environment.
+  app.get(["/auth/callback", "/auth/callback/"], (req, res) => {
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Social Up Hub | Authenticating...</title>
+    <style>
+        body {
+            background-color: #020617;
+            color: #f8fafc;
+            font-family: system-ui, -apple-system, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            text-align: center;
+            background: #0f172a;
+            padding: 2.5rem;
+            border-radius: 0.75rem;
+            border: 1px solid #1e293b;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            max-width: 400px;
+            width: 90%;
+        }
+        .spinner {
+            border: 3px solid rgba(255,255,255,0.1);
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border-left-color: #10b981;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1.5rem auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        h2 { margin: 0 0 0.5rem 0; font-size: 1.25rem; font-weight: 600; }
+        p { color: #94a3b8; font-size: 0.875rem; margin: 0; line-height: 1.5; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="spinner"></div>
+        <h2>Authenticating with Google</h2>
+        <p>Connecting your account securely. This window will close automatically...</p>
+    </div>
+    <script>
+        try {
+            // Short timeout to ensure the hash is fully populated in window.location
+            setTimeout(() => {
+                const hash = window.location.hash || '';
+                const search = window.location.search || '';
+                
+                if (window.opener) {
+                    console.log("Sending SUPABASE_AUTH_CALLBACK event to opener window");
+                    window.opener.postMessage({ 
+                        type: 'SUPABASE_AUTH_CALLBACK', 
+                        hash: hash,
+                        search: search
+                    }, '*');
+                    
+                    // Allow small buffer for postMessage to be received before closing
+                    setTimeout(() => {
+                        window.close();
+                    }, 800);
+                } else {
+                    console.warn("No window.opener found. Redirecting to home page.");
+                    window.location.href = '/' + hash + search;
+                }
+            }, 150);
+        } catch (err) {
+            console.error("Popup communication failed:", err);
+            document.body.innerHTML = '<div class="container"><h2 style="color:#ef4444;">Authentication Error</h2><p>' + err.message + '</p></div>';
+        }
+    </script>
+</body>
+</html>`;
+    res.send(html);
+  });
+
+  // --- IN-MEMORY LOGGING API & VIEW ---
+  app.get("/api/logs-raw", (req, res) => {
+    try {
+      const now = new Date();
+      const oneHourAgo = now.getTime() - 60 * 60 * 1000;
+      
+      // Prune and sort newest first
+      const activeLogs = tempErrorLogs
+        .filter(log => new Date(log.timestamp).getTime() > oneHourAgo)
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        
+      res.json(activeLogs);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to retrieve logs" });
+    }
+  });
+
+  app.post("/api/logs/clear", (req, res) => {
+    try {
+      tempErrorLogs.length = 0;
+      res.json({ success: true, message: "In-memory logs successfully cleared." });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/logs/test", (req, res) => {
+    try {
+      logTempError("This is a manually triggered test error to verify the logs work!", "TEST_ERROR", {
+        triggeredAt: new Date().toISOString(),
+        browserInfo: req.headers['user-agent'] || 'unknown',
+        ip: req.ip || 'unknown'
+      });
+      res.json({ success: true, message: "Test log added." });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/logs", (req, res) => {
+    const html = `<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Social Up Hub | Live Logs Viewer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        pre, code { font-family: 'JetBrains Mono', monospace; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+    <div class="max-w-6xl mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="flex flex-col md:flex-row md:items-center md:justify-between border-b border-slate-800 pb-6 mb-8 gap-4">
+            <div>
+                <div class="flex items-center gap-3">
+                    <span class="flex h-3 w-3 relative">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                    </span>
+                    <h1 class="text-2xl font-bold tracking-tight text-white">Social Up Hub <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 ml-1">Live Logs</span></h1>
+                </div>
+                <p class="text-sm text-slate-400 mt-2">Temporary in-memory diagnostics console. Logs are kept locally for exactly 1 hour.</p>
+            </div>
+            <div class="flex items-center gap-3 flex-wrap">
+                <button onclick="fetchLogs()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-md text-sm font-medium transition-colors inline-flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 3H15m3 0v5h-5"></path></svg>
+                    Refresh
+                </button>
+                <button onclick="triggerTestLog()" class="px-4 py-2 bg-emerald-950/40 text-emerald-300 hover:bg-emerald-900/50 border border-emerald-800/60 rounded-md text-sm font-medium transition-colors">
+                    Add Test Log
+                </button>
+                <button onclick="clearLogs()" class="px-4 py-2 bg-rose-950/40 text-rose-300 hover:bg-rose-900/50 border border-rose-800/60 rounded-md text-sm font-medium transition-colors">
+                    Clear Logs
+                </button>
+            </div>
+        </div>
+
+        <!-- Filter bar -->
+        <div class="bg-slate-900/50 border border-slate-800 rounded-lg p-4 mb-6 flex flex-col sm:flex-row gap-4 items-center justify-between">
+            <div class="relative w-full sm:w-72">
+                <input type="text" id="searchInput" oninput="filterLogs()" placeholder="Search logs..." class="w-full bg-slate-950 border border-slate-800 rounded-md px-3 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-slate-700">
+            </div>
+            <div class="flex gap-2 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0">
+                <button onclick="setFilter('ALL')" class="filter-btn px-3 py-1 bg-slate-800 border border-slate-700 text-xs font-medium rounded-md transition-colors text-white" data-filter="ALL">All Logs</button>
+                <button onclick="setFilter('SYNC_USER')" class="filter-btn px-3 py-1 bg-slate-900/60 border border-slate-800/80 text-xs font-medium rounded-md transition-colors text-slate-400 hover:text-white" data-filter="SYNC_USER">Sync Users</button>
+                <button onclick="setFilter('ERROR')" class="filter-btn px-3 py-1 bg-slate-900/60 border border-slate-800/80 text-xs font-medium rounded-md transition-colors text-slate-400 hover:text-white" data-filter="ERROR">Errors</button>
+                <button onclick="setFilter('CRITICAL')" class="filter-btn px-3 py-1 bg-slate-900/60 border border-slate-800/80 text-xs font-medium rounded-md transition-colors text-slate-400 hover:text-white" data-filter="CRITICAL">Critical</button>
+            </div>
+        </div>
+
+        <!-- System warning when empty -->
+        <div id="noLogsView" class="hidden flex flex-col items-center justify-center py-16 border border-dashed border-slate-800 rounded-xl bg-slate-900/20">
+            <svg class="w-12 h-12 text-slate-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+            <p class="text-slate-400 text-sm">No logs recorded in the last hour.</p>
+            <p class="text-xs text-slate-600 mt-1">If logins fail, the error details will appear here immediately.</p>
+        </div>
+
+        <!-- Logs Container -->
+        <div id="logsContainer" class="space-y-4"></div>
+    </div>
+
+    <script>
+        let allLogs = [];
+        let currentFilter = 'ALL';
+
+        async function fetchLogs() {
+            try {
+                const res = await fetch('/api/logs-raw');
+                allLogs = await res.json();
+                renderLogs();
+            } catch (err) {
+                console.error("Failed to fetch logs:", err);
+            }
+        }
+
+        function setFilter(filter) {
+            currentFilter = filter;
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                if (btn.getAttribute('data-filter') === filter) {
+                    btn.classList.add('bg-slate-800', 'border-slate-700', 'text-white');
+                    btn.classList.remove('bg-slate-900/60', 'border-slate-800/80', 'text-slate-400');
+                } else {
+                    btn.classList.remove('bg-slate-800', 'border-slate-700', 'text-white');
+                    btn.classList.add('bg-slate-900/60', 'border-slate-800/80', 'text-slate-400');
+                }
+            });
+            renderLogs();
+        }
+
+        function filterLogs() {
+            renderLogs();
+        }
+
+        async function clearLogs() {
+            if (!confirm("Are you sure you want to clear the in-memory log list?")) return;
+            try {
+                await fetch('/api/logs/clear', { method: 'POST' });
+                fetchLogs();
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function triggerTestLog() {
+            try {
+                await fetch('/api/logs/test', { method: 'POST' });
+                fetchLogs();
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        function timeSince(dateString) {
+            const date = new Date(dateString);
+            const seconds = Math.floor((new Date() - date) / 1000);
+            if (seconds < 5) return 'Just now';
+            if (seconds < 60) return seconds + 's ago';
+            const minutes = Math.floor(seconds / 60);
+            if (minutes < 60) return minutes + 'm ago';
+            return date.toLocaleTimeString();
+        }
+
+        function toggleDetails(index) {
+            const el = document.getElementById('details-' + index);
+            const icon = document.getElementById('icon-' + index);
+            if (el.classList.contains('hidden')) {
+                el.classList.remove('hidden');
+                icon.style.transform = 'rotate(90deg)';
+            } else {
+                el.classList.add('hidden');
+                icon.style.transform = 'rotate(0deg)';
+            }
+        }
+
+        function renderLogs() {
+            const container = document.getElementById('logsContainer');
+            const searchVal = document.getElementById('searchInput').value.toLowerCase();
+            
+            let filtered = allLogs;
+            
+            if (currentFilter !== 'ALL') {
+                filtered = filtered.filter(l => l.type === currentFilter);
+            }
+            
+            if (searchVal) {
+                filtered = filtered.filter(l => 
+                    l.message.toLowerCase().includes(searchVal) || 
+                    (l.type && l.type.toLowerCase().includes(searchVal)) ||
+                    (l.details && JSON.stringify(l.details).toLowerCase().includes(searchVal))
+                );
+            }
+
+            if (filtered.length === 0) {
+                document.getElementById('noLogsView').classList.remove('hidden');
+                container.innerHTML = '';
+                return;
+            } else {
+                document.getElementById('noLogsView').classList.add('hidden');
+            }
+
+            container.innerHTML = filtered.map((log, index) => {
+                let badgeClass = "bg-slate-800 text-slate-300 border-slate-700";
+                if (log.type === "CRITICAL") badgeClass = "bg-rose-950/50 text-rose-300 border-rose-900/60";
+                else if (log.type === "SYNC_USER") badgeClass = "bg-amber-950/50 text-amber-300 border-amber-900/60";
+                else if (log.type === "TEST_ERROR") badgeClass = "bg-emerald-950/50 text-emerald-300 border-emerald-900/60";
+
+                const hasDetails = log.details && Object.keys(log.details).length > 0;
+
+                return \`
+                    <div class="bg-slate-900/60 border border-slate-800 rounded-lg overflow-hidden transition-all hover:border-slate-700/80">
+                        <div class="p-4 flex items-start justify-between gap-4 \\\${hasDetails ? 'cursor-pointer select-none' : ''}" \\\${hasDetails ? \\\`onclick="toggleDetails(\\\${index})"\\\` : ''}>
+                            <div class="flex items-start gap-3">
+                                \\\${hasDetails ? \\\`
+                                    <svg id="icon-\\\${index}" class="w-4 h-4 text-slate-500 mt-1 transition-transform" style="transform: rotate(0deg);" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"></path></svg>
+                                \\\` : '<div class="w-4"></div>'}
+                                <div>
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <span class="text-xs font-mono px-2 py-0.5 rounded border \\\${badgeClass}">\\\${log.type}</span>
+                                        <span class="text-xs text-slate-500">\\\${timeSince(log.timestamp)}</span>
+                                        <span class="text-xs text-slate-600 font-mono">\\\${new Date(log.timestamp).toLocaleTimeString()}</span>
+                                    </div>
+                                    <p class="text-sm font-medium text-slate-200 mt-1.5 break-all">\\\${log.message}</p>
+                                </div>
+                            </div>
+                        </div>
+                        \\\${hasDetails ? \\\`
+                            <div id="details-\\\${index}" class="hidden bg-slate-950/80 border-t border-slate-800/80 p-4">
+                                <span class="text-xs text-slate-500 font-medium block mb-2">Contextual Data & Stack Trace:</span>
+                                <pre class="text-xs text-emerald-400 bg-slate-950 p-3 rounded overflow-x-auto border border-slate-900 max-h-96"><code>\\\${JSON.stringify(log.details, null, 2)}</code></pre>
+                            </div>
+                        \\\` : ''}
+                    </div>
+                \`;
+            }).join('');
+        }
+
+        // Auto-refresh logs every 10 seconds
+        setInterval(fetchLogs, 10000);
+
+        // Initial fetch
+        fetchLogs();
+    </script>
+</body>
+</html>`;
+    res.send(html);
   });
 
   // Initialize Razorpay lazily or safely
@@ -955,6 +1330,27 @@ async function startServer() {
       return res.json({ success: true, user: insertedUser });
     } catch (error: any) {
       console.error("Failed to sync user in backend:", error.message || error);
+      try {
+        const errorLog = {
+          timestamp: new Date().toISOString(),
+          userId: id,
+          userEmail: email,
+          inputName: name,
+          inputMobile: mobile,
+          referredByCode: referredByCode,
+          errorMessage: error.message || String(error),
+          errorDetails: error.details || null,
+          errorHint: error.hint || null,
+          errorCode: error.code || null,
+          stack: error.stack || null
+        };
+        fs.writeFileSync(path.join(process.cwd(), "sync_error.log"), JSON.stringify(errorLog, null, 2), "utf8");
+        
+        // Log to our memory temp logs too
+        logTempError(`Failed to sync user: ${error.message || String(error)}`, "SYNC_USER", errorLog);
+      } catch (logErr) {
+        console.error("Failed to write sync_error.log:", logErr);
+      }
       return res.status(500).json({ error: error.message || "Failed to synchronize user profile" });
     }
   });
