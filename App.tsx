@@ -234,10 +234,92 @@ const App: React.FC = () => {
                       setSyncError(null);
                       const banStatus = checkBanStatus(dbUser as User);
                       setUser({ ...dbUser, id: session.user.id } as User);
+                      if (window.location.pathname.includes('/auth/callback') || window.location.hash.includes('access_token')) {
+                          window.history.replaceState({}, document.title, window.location.origin);
+                      }
                       if (banStatus !== 'ALLOWED') setView('BANNED');
                       else if (view === 'AUTH' || view === 'LANDING') setView('DASHBOARD');
                   } else {
-                      throw new Error("No user profile found in database.");
+                      console.log("No profile found. Creating client-side fallback user profile...");
+                      const referredByCode = localStorage.getItem('pending_ref_code') || '';
+                      let referredBy = null;
+                      if (referredByCode) {
+                          try {
+                              const { data: refUser } = await supabase
+                                  .from('users')
+                                  .select('id')
+                                  .eq('referral_code', referredByCode.toUpperCase())
+                                  .maybeSingle();
+                              if (refUser) {
+                                  referredBy = refUser.id;
+                              }
+                          } catch (refErr) {
+                              console.warn("Could not query referrer client-side:", refErr);
+                          }
+                      }
+
+                      const referralCode = `U${session.user.id.substring(0, 4)}${Math.floor(10000 + Math.random() * 90000)}`.toUpperCase();
+                      const fallbackName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email?.split('@')[0] || "User";
+                      const fallbackMobile = session.user.user_metadata?.phone || null;
+
+                      const newUserProfile: User = {
+                          id: session.user.id,
+                          email: session.user.email || "",
+                          name: fallbackName,
+                          mobile: fallbackMobile,
+                          role: UserRole.USER,
+                          balance: 0,
+                          totalSpent: 0,
+                          isBanned: false,
+                          createdAt: new Date().toISOString(),
+                          lastLogin: new Date().toISOString(),
+                          referral_code: referralCode,
+                          referred_by: referredBy,
+                          referral_balance: 0,
+                          total_referral_earnings: 0
+                      };
+
+                      const { data: insertedUser, error: insertErr } = await supabase
+                          .from('users')
+                          .upsert(newUserProfile, { onConflict: 'id' })
+                          .select()
+                          .single();
+
+                      if (insertErr) {
+                          // Handle name unique constraints gracefully by appending random numbers
+                          if (insertErr.message?.includes('users_name_key') || insertErr.details?.includes('name')) {
+                              newUserProfile.name = `${fallbackName}_${Math.floor(1000 + Math.random() * 9000)}`;
+                              const { data: retriedUser, error: retryErr } = await supabase
+                                  .from('users')
+                                  .upsert(newUserProfile, { onConflict: 'id' })
+                                  .select()
+                                  .single();
+                              if (retryErr) throw retryErr;
+                              console.log("Client-side fallback user profile creation successful (retried).");
+                              localStorage.removeItem('pending_ref_code');
+                              setSyncError(null);
+                              const banStatus = checkBanStatus(retriedUser as User);
+                              setUser({ ...retriedUser, id: session.user.id } as User);
+                              if (window.location.pathname.includes('/auth/callback') || window.location.hash.includes('access_token')) {
+                                  window.history.replaceState({}, document.title, window.location.origin);
+                              }
+                              if (banStatus !== 'ALLOWED') setView('BANNED');
+                              else if (view === 'AUTH' || view === 'LANDING') setView('DASHBOARD');
+                              return;
+                          }
+                          throw insertErr;
+                      }
+
+                      console.log("Client-side fallback user profile creation successful.");
+                      localStorage.removeItem('pending_ref_code');
+                      setSyncError(null);
+                      const banStatus = checkBanStatus(insertedUser as User);
+                      setUser({ ...insertedUser, id: session.user.id } as User);
+                      if (window.location.pathname.includes('/auth/callback') || window.location.hash.includes('access_token')) {
+                          window.history.replaceState({}, document.title, window.location.origin);
+                      }
+                      if (banStatus !== 'ALLOWED') setView('BANNED');
+                      else if (view === 'AUTH' || view === 'LANDING') setView('DASHBOARD');
                   }
               } catch (fallbackError: any) {
                   console.error("Failed to sync user via server AND client-side fallback:", fallbackError.message || String(fallbackError));
