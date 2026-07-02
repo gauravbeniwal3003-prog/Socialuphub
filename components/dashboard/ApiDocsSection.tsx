@@ -36,7 +36,7 @@ export const ApiDocsSection: React.FC = () => {
     if (backendBase) {
       return `${backendBase.replace(/\/$/, "")}/api/v2`;
     }
-    return `https://socialuphub-backend.onrender.com/api/v2`;
+    return typeof window !== 'undefined' ? `${window.location.origin}/api/v2` : `https://socialuphub-backend.onrender.com/api/v2`;
   };
 
   const apiBaseUrl = getActiveApiBaseUrl();

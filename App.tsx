@@ -175,7 +175,7 @@ const App: React.FC = () => {
               const fallbackMobile = session.user.user_metadata?.phone || "";
 
               // Sync user on the backend safely bypassing client-side RLS policies and race conditions
-              const backendBase = config?.renderBackendUrl?.trim() || 'https://socialuphub-backend.onrender.com';
+              const backendBase = config?.renderBackendUrl?.trim() || window.location.origin;
               const syncUrl = `${backendBase.replace(/\/$/, "")}/api/sync-user`;
               const response = await fetch(syncUrl, {
                   method: 'POST',
