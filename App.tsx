@@ -219,11 +219,33 @@ const App: React.FC = () => {
                   throw new Error("No user profile returned from sync API.");
               }
           } catch (e: any) {
-              console.error("Failed to sync user via server:", e.message || JSON.stringify(e));
-              setSyncError(e.message || "Failed to synchronize user profile");
-              await supabase.auth.signOut();
-              setUser(null);
-              setView('AUTH');
+              console.warn("Server sync failed. Attempting direct client-side Supabase profile fetch fallback:", e.message || String(e));
+              try {
+                  const { data: dbUser, error: dbError } = await supabase
+                      .from('users')
+                      .select('*')
+                      .eq('id', session.user.id)
+                      .maybeSingle();
+
+                  if (dbError) throw dbError;
+
+                  if (dbUser) {
+                      console.log("Client-side Supabase user profile fallback successful.");
+                      setSyncError(null);
+                      const banStatus = checkBanStatus(dbUser as User);
+                      setUser({ ...dbUser, id: session.user.id } as User);
+                      if (banStatus !== 'ALLOWED') setView('BANNED');
+                      else if (view === 'AUTH' || view === 'LANDING') setView('DASHBOARD');
+                  } else {
+                      throw new Error("No user profile found in database.");
+                  }
+              } catch (fallbackError: any) {
+                  console.error("Failed to sync user via server AND client-side fallback:", fallbackError.message || String(fallbackError));
+                  setSyncError(e.message || "Failed to synchronize user profile");
+                  await supabase.auth.signOut();
+                  setUser(null);
+                  setView('AUTH');
+              }
           }
       } else {
           setUser(null);

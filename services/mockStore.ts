@@ -1083,12 +1083,23 @@ export const getEmailByMobile = async (m: string) => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'getEmailByMobile', value: m })
         });
-        if (!response.ok) return null;
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const resData = await response.json();
         return resData.email;
     } catch (e) {
-        console.error("getEmailByMobile failed:", e);
-        return null;
+        console.warn("getEmailByMobile server lookup failed, attempting direct Supabase query fallback:", e);
+        try {
+            const { data, error } = await supabase
+                .from('users')
+                .select('email')
+                .eq('mobile', m)
+                .maybeSingle();
+            if (error) throw error;
+            return data?.email || null;
+        } catch (fallbackError) {
+            console.error("Client-side fallback lookup failed:", fallbackError);
+            return null;
+        }
     }
 };
 
