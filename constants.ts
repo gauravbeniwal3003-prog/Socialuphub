@@ -4,7 +4,7 @@ import { Service } from './types';
 export const APP_NAME = "Social Up Hub";
 export const CURRENCY_SYMBOL = "₹";
 export const CONTACT_WHATSAPP_URL = "https://wa.me/919729480795";
-export const INSTAGRAM_URL = "https://www.instagram.com/socialuphub?igsh=MWdla3BxOXZvajEydA==";
+export const INSTAGRAM_URL = "https://www.instagram.com/gauravbeniwalx?igsh=cXQ4ZjFtZ3B1ZWVh";
 
 // Razorpay Config
 export const RAZORPAY_KEY_ID = "rzp_live_RzLdEkePrpnfd4";

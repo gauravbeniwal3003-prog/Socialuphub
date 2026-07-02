@@ -4,7 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { 
   LayoutDashboard, ShoppingCart, Wallet, History, User as UserIcon, 
   HelpCircle, Users, Menu, X, LogOut, ChevronRight, Home, List, Zap, 
-  CreditCard, Globe, MessageCircle, Sun, Moon, Code
+  CreditCard, Globe, MessageCircle, Sun, Moon, Code, BarChart3, ShoppingBag, FolderPlus, Tag, Settings
 } from 'lucide-react';
 import { useAuth } from '../App';
 import { UserRole } from '../types';
@@ -48,8 +48,18 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   const isAdmin = user?.role === UserRole.ADMIN;
 
-  // Drawer Items
-  const drawerItems = [
+  // Drawer Items dynamically chosen based on role
+  const drawerItems = isAdmin ? [
+    { icon: <BarChart3 size={18} />, label: 'Admin Home', path: '/admin/dashboard' },
+    { icon: <Users size={18} />, label: 'Users', path: '/admin/users' },
+    { icon: <ShoppingBag size={18} />, label: 'Orders', path: '/admin/orders' },
+    { icon: <List size={18} />, label: 'Services', path: '/admin/services' },
+    { icon: <FolderPlus size={18} />, label: 'Categories', path: '/admin/categories' },
+    { icon: <Tag size={18} />, label: 'Coupons', path: '/admin/coupons' },
+    { icon: <Settings size={18} />, label: 'Settings', path: '/admin/settings' },
+    { icon: <Code size={18} />, label: 'APIs', path: '/admin/api' },
+    { icon: <LogOut size={18} />, label: 'Logout', action: logout },
+  ] : [
     { icon: <Zap size={18} />, label: 'New Order', path: '/dashboard' },
     { icon: <List size={18} />, label: 'Orders', path: '/dashboard/orders' },
     { icon: <CreditCard size={18} />, label: 'Add Funds', path: '/dashboard/add-funds' },
@@ -59,12 +69,39 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     { icon: <LogOut size={18} />, label: 'Logout', action: logout },
   ];
 
+  const sidebarItems = isAdmin ? [
+    { icon: <BarChart3 size={20} />, label: 'Admin Home', path: '/admin/dashboard' },
+    { icon: <Users size={20} />, label: 'Users', path: '/admin/users' },
+    { icon: <ShoppingBag size={20} />, label: 'Orders', path: '/admin/orders' },
+    { icon: <List size={20} />, label: 'Services', path: '/admin/services' },
+    { icon: <FolderPlus size={20} />, label: 'Categories', path: '/admin/categories' },
+    { icon: <Tag size={20} />, label: 'Coupons', path: '/admin/coupons' },
+    { icon: <Settings size={20} />, label: 'Settings', path: '/admin/settings' },
+    { icon: <Code size={20} />, label: 'APIs', path: '/admin/api' },
+  ] : [
+    { icon: <LayoutDashboard size={20} />, label: 'Dashboard', path: '/dashboard' },
+    { icon: <Zap size={20} />, label: 'New Order', path: '/dashboard' },
+    { icon: <History size={20} />, label: 'Orders', path: '/dashboard/orders' },
+    { icon: <Wallet size={20} />, label: 'Add Funds', path: '/dashboard/add-funds' },
+    { icon: <Users size={20} />, label: 'Refer & Earn', path: '/dashboard/referrals' },
+    { icon: <Code size={20} />, label: 'API Developer', path: '/dashboard/api' },
+    { icon: <UserIcon size={20} />, label: 'Profile', path: '/dashboard/profile' },
+    { icon: <HelpCircle size={20} />, label: 'Support', path: '/dashboard/support' },
+  ];
+
   return (
     <div className="min-h-screen flex flex-col lg:flex-row bg-[var(--app-bg)] text-[var(--app-text)] font-sans selection:bg-[var(--app-accent)]/30 selection:text-[var(--app-text)]">
       
       {/* --- MOBILE TOP HEADER --- */}
       <div className="lg:hidden fixed top-0 left-0 right-0 z-40 bg-[var(--app-sidebar-bg)]/95 backdrop-blur-md border-b border-[var(--app-border)] px-3 py-2.5 flex items-center justify-between shadow-lg">
-         <Logo className="scale-80 sm:scale-90 origin-left shrink-0" />
+         <div className="flex items-center gap-2">
+           {isAdmin && (
+             <button onClick={() => setIsDrawerOpen(true)} className="text-[var(--app-text)] hover:opacity-80 p-1 rounded-lg">
+               <Menu size={20} />
+             </button>
+           )}
+           <Logo className="scale-80 sm:scale-90 origin-left shrink-0" />
+         </div>
          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
             <button 
               onClick={toggleTheme} 
@@ -77,8 +114,10 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               <MessageCircle size={20} className="sm:w-6 sm:h-6" />
             </a>
             <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] rounded-full px-2.5 py-1 flex items-center gap-1 shrink-0 shadow-sm">
-               <span className="text-[10px] font-bold text-[var(--app-text-muted)] hidden sm:inline uppercase tracking-wider">Balance</span>
-               <span className="text-xs sm:text-sm font-black text-[var(--app-text)] font-mono">{CURRENCY_SYMBOL}{(user?.balance || 0).toFixed(2)}</span>
+               <span className="text-[10px] font-bold text-[var(--app-text-muted)] hidden sm:inline uppercase tracking-wider">{isAdmin ? "Admin" : "Balance"}</span>
+               <span className="text-xs sm:text-sm font-black text-[var(--app-text)] font-mono">
+                 {isAdmin ? "🛡️" : `${CURRENCY_SYMBOL}${(user?.balance || 0).toFixed(2)}`}
+               </span>
             </div>
          </div>
       </div>
@@ -103,20 +142,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             </div>
           )}
           <nav className="space-y-1">
-            {[
-              { icon: <LayoutDashboard size={20} />, label: 'Dashboard', path: '/dashboard' },
-              { icon: <ShoppingCart size={20} />, label: 'New Order', path: '/dashboard' },
-              { icon: <History size={20} />, label: 'Orders', path: '/dashboard/orders' },
-              { icon: <Wallet size={20} />, label: 'Add Funds', path: '/dashboard/add-funds' },
-              { icon: <Users size={20} />, label: 'Refer & Earn', path: '/dashboard/referrals' },
-              { icon: <Code size={20} />, label: 'API Developer', path: '/dashboard/api' },
-              { icon: <UserIcon size={20} />, label: 'Profile', path: '/dashboard/profile' },
-              { icon: <HelpCircle size={20} />, label: 'Support', path: '/dashboard/support' },
-            ].map((item) => (
+            {sidebarItems.map((item) => (
               <button
                 key={item.label}
                 onClick={() => handleNav(item.path)}
-                className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium transition-all rounded-lg ${location.pathname === item.path ? 'text-[var(--app-text)] bg-[var(--app-accent)]/10 border-r-2 border-[var(--app-accent)] font-bold' : 'text-[var(--app-text-muted)] hover:text-[var(--app-text)] hover:bg-[var(--app-accent)]/5'}`}
+                className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium transition-all rounded-lg ${
+                  location.pathname === item.path || (item.path === '/admin/dashboard' && location.pathname === '/admin')
+                    ? 'text-[var(--app-text)] bg-[var(--app-accent)]/10 border-r-2 border-[var(--app-accent)] font-bold' 
+                    : 'text-[var(--app-text-muted)] hover:text-[var(--app-text)] hover:bg-[var(--app-accent)]/5'
+                }`}
               >
                 {item.icon}
                 {item.label}
@@ -178,38 +212,40 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       </main>
 
       {/* --- MOBILE BOTTOM NAVIGATION --- */}
-      <div className="lg:hidden fixed bottom-0 w-full z-40 bg-[var(--app-sidebar-bg)] border-t border-[var(--app-border)] pb-safe shadow-lg">
-        <div className="flex justify-between items-center px-2">
-           <button onClick={() => setIsDrawerOpen(true)} className="flex flex-col items-center gap-1 p-3 text-[var(--app-text-muted)] hover:text-[var(--app-text)]">
-              <Menu size={20} />
-              <span className="text-[10px] font-medium">Menu</span>
-           </button>
-           
-           <button onClick={() => handleNav('/dashboard/orders')} className={`flex flex-col items-center gap-1 p-3 ${location.pathname === '/dashboard/orders' ? 'text-[var(--app-accent)] font-bold' : 'text-[var(--app-text-muted)] hover:text-[var(--app-text)]'}`}>
-              <List size={20} />
-              <span className="text-[10px] font-medium">Orders</span>
-           </button>
+      {!isAdmin && (
+        <div className="lg:hidden fixed bottom-0 w-full z-40 bg-[var(--app-sidebar-bg)] border-t border-[var(--app-border)] pb-safe shadow-lg">
+          <div className="flex justify-between items-center px-2">
+             <button onClick={() => setIsDrawerOpen(true)} className="flex flex-col items-center gap-1 p-3 text-[var(--app-text-muted)] hover:text-[var(--app-text)]">
+                <Menu size={20} />
+                <span className="text-[10px] font-medium">Menu</span>
+             </button>
+             
+             <button onClick={() => handleNav('/dashboard/orders')} className={`flex flex-col items-center gap-1 p-3 ${location.pathname === '/dashboard/orders' ? 'text-[var(--app-accent)] font-bold' : 'text-[var(--app-text-muted)] hover:text-[var(--app-text)]'}`}>
+                <List size={20} />
+                <span className="text-[10px] font-medium">Orders</span>
+             </button>
 
-           <div className="relative -top-5">
-              <button 
-                onClick={() => handleNav('/dashboard')} 
-                className="w-14 h-14 rounded-full bg-[var(--app-accent)] text-white shadow-[0_0_20px_rgba(34,197,94,0.4)] flex items-center justify-center transform active:scale-95 transition-all border-4 border-[var(--app-bg)]"
-              >
-                 <span className="text-2xl font-light mb-1">+</span>
-              </button>
-           </div>
+             <div className="relative -top-5">
+                <button 
+                  onClick={() => handleNav('/dashboard')} 
+                  className="w-14 h-14 rounded-full bg-[var(--app-accent)] text-white shadow-[0_0_20px_rgba(34,197,94,0.4)] flex items-center justify-center transform active:scale-95 transition-all border-4 border-[var(--app-bg)]"
+                >
+                   <span className="text-2xl font-light mb-1">+</span>
+                </button>
+             </div>
 
-           <button onClick={() => handleNav('/dashboard/add-funds')} className={`flex flex-col items-center gap-1 p-3 ${location.pathname === '/dashboard/add-funds' ? 'text-[var(--app-accent)] font-bold' : 'text-[var(--app-text-muted)] hover:text-[var(--app-text)]'}`}>
-              <Wallet size={20} />
-              <span className="text-[10px] font-medium">Add Funds</span>
-           </button>
+             <button onClick={() => handleNav('/dashboard/add-funds')} className={`flex flex-col items-center gap-1 p-3 ${location.pathname === '/dashboard/add-funds' ? 'text-[var(--app-accent)] font-bold' : 'text-[var(--app-text-muted)] hover:text-[var(--app-text)]'}`}>
+                <Wallet size={20} />
+                <span className="text-[10px] font-medium">Add Funds</span>
+             </button>
 
-           <button onClick={() => handleNav('/dashboard/profile')} className={`flex flex-col items-center gap-1 p-3 ${location.pathname === '/dashboard/profile' ? 'text-[var(--app-accent)] font-bold' : 'text-[var(--app-text-muted)] hover:text-[var(--app-text)]'}`}>
-              <UserIcon size={20} />
-              <span className="text-[10px] font-medium">Account</span>
-           </button>
+             <button onClick={() => handleNav('/dashboard/profile')} className={`flex flex-col items-center gap-1 p-3 ${location.pathname === '/dashboard/profile' ? 'text-[var(--app-accent)] font-bold' : 'text-[var(--app-text-muted)] hover:text-[var(--app-text)]'}`}>
+                <UserIcon size={20} />
+                <span className="text-[10px] font-medium">Account</span>
+             </button>
+          </div>
         </div>
-      </div>
+      )}
 
     </div>
   );

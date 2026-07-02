@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   useStore,
   fetchUsers,
@@ -2196,16 +2197,42 @@ const UserManagement: React.FC<{
   // --- MAIN ADMIN PANEL WRAPPER ---
 export const AdminPanel: React.FC = () => {
   const { logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<
-    | "DASHBOARD"
-    | "USERS"
-    | "ORDERS"
-    | "SERVICES"
-    | "CATEGORIES"
-    | "COUPONS"
-    | "SETTINGS"
-    | "API"
-  >("DASHBOARD");
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Parse active tab dynamically from URL pathname
+  const activeTab = useMemo(() => {
+    const parts = location.pathname.split('/');
+    const lastPart = parts[parts.length - 1]?.toUpperCase() || "DASHBOARD";
+    if (lastPart === "ADMIN" || lastPart === "DASHBOARD" || lastPart === "") {
+      return "DASHBOARD";
+    }
+    return lastPart as
+      | "DASHBOARD"
+      | "USERS"
+      | "ORDERS"
+      | "SERVICES"
+      | "CATEGORIES"
+      | "COUPONS"
+      | "SETTINGS"
+      | "API";
+  }, [location.pathname]);
+
+  const setActiveTab = (tab: string) => {
+    if (tab === "DASHBOARD") {
+      navigate("/admin/dashboard");
+    } else {
+      navigate(`/admin/${tab.toLowerCase()}`);
+    }
+  };
+
+  // Enforce secure base route redirection when an admin user lands on other roots
+  useEffect(() => {
+    if (!location.pathname.startsWith('/admin')) {
+      navigate('/admin/dashboard', { replace: true });
+    }
+  }, [location.pathname, navigate]);
+
   const [notification, setNotification] = useState<{
     msg: string;
     type: "success" | "error";

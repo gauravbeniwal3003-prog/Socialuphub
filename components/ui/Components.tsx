@@ -128,7 +128,7 @@ export const Notification: React.FC<{
         ? 'bg-[var(--app-card-bg)] border-[var(--app-accent)]/30 text-[var(--app-text)]' 
         : 'bg-[var(--app-card-bg)] border-red-500/35 text-[var(--app-text)]'
     }`}>
-      <div className={`p-3 rounded-full shrink-0 ${type === 'success' ? 'bg-[#ebf7ed] text-[var(--app-accent)]' : 'bg-red-50 text-red-600'}`}>
+      <div className={`p-3 rounded-full shrink-0 ${type === 'success' ? 'bg-[var(--app-accent)]/10 text-[var(--app-accent)]' : 'bg-red-50 text-red-600'}`}>
         {type === 'success' ? <Check size={24} /> : <AlertTriangle size={24} />}
       </div>
       <div className="flex-1">

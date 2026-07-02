@@ -136,15 +136,7 @@ const LandingPage: React.FC<LandingProps> = ({ onGetStarted }) => {
             <Logo />
           </div>
           
-          {/* Mockup styled center navigation links */}
-          <div className="hidden md:flex items-center gap-8 text-sm font-semibold text-[var(--app-text-muted)]">
-            <button onClick={onGetStarted} className="text-[var(--app-accent)] hover:underline flex items-center gap-1">🟢 Sign in</button>
-            <button onClick={onGetStarted} className="text-[var(--app-accent)] hover:underline flex items-center gap-1">🟢 Signup</button>
-            <a href="#services" className="hover:text-[var(--app-text)] transition-colors">Services</a>
-            <a href="#testimonials" className="hover:text-[var(--app-text)] transition-colors">Success Stories</a>
-            <a href="#how" className="hover:text-[var(--app-text)] transition-colors">Terms & Info</a>
-            <button onClick={() => window.open(CONTACT_WHATSAPP_URL, '_blank')} className="hover:text-[var(--app-text)] transition-colors">Support</button>
-          </div>
+          {/* Mockup styled center navigation links removed to clean up top navigation */}
           
           <Button size="sm" onClick={onGetStarted} className="bg-[var(--app-accent)] hover:bg-[var(--app-accent-hover)] text-white shadow-md text-xs md:text-sm px-5 py-2.5 rounded-xl font-bold">Get Started</Button>
         </div>
@@ -324,77 +316,6 @@ const LandingPage: React.FC<LandingProps> = ({ onGetStarted }) => {
         </div>
       </section>
 
-      {/* --- SUCCESS STORIES SECTION (Image 1 Parity) --- */}
-      <section id="testimonials" className="py-20 bg-gradient-to-b from-[var(--app-accent)] to-[#24a14a] text-white overflow-hidden relative">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_bottom,_var(--tw-gradient-stops))] from-black/10 via-transparent to-transparent pointer-events-none"></div>
-        <div className="max-w-7xl mx-auto px-6 relative z-10">
-          
-          <div className="text-center mb-12">
-            <h2 className="text-3xl md:text-4xl font-black tracking-tight mb-2 font-sans text-white uppercase">
-              Success stories
-            </h2>
-            <p className="text-emerald-100 text-sm md:text-base max-w-lg mx-auto font-medium">
-              Check out what our customers have to say about our panel.
-            </p>
-          </div>
-
-          {/* Testimonial slider / carousel as shown in Image 1 */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-5xl mx-auto items-stretch">
-            
-            {/* Slide Card 1 */}
-            <div className="bg-white text-gray-900 rounded-3xl p-6 md:p-8 shadow-xl flex flex-col justify-between hover:scale-[1.02] transition-transform duration-300">
-              <div>
-                <div className="flex gap-1 mb-4 text-[#2ebd59]">
-                  <Star fill="currentColor" size={16} />
-                  <Star fill="currentColor" size={16} />
-                  <Star fill="currentColor" size={16} />
-                  <Star fill="currentColor" size={16} />
-                  <Star fill="currentColor" size={16} />
-                </div>
-                <h4 className="font-extrabold text-lg mb-2 text-[#0f1711]">Jane Kim</h4>
-                <p className="text-gray-600 text-sm leading-relaxed font-medium">
-                  "I couldn't figure out the best way to promote my business online that could be effective and affordable at the same time. This SMM panel is the best solution I've found so far! Just check their prices — you really can't go wrong with that."
-                </p>
-              </div>
-              <div className="mt-6 pt-4 border-t border-gray-100 flex items-center justify-between">
-                <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">Reseller</span>
-                <span className="text-xs font-bold text-[#2ebd59] flex items-center gap-1">🟢 Verified Buyer</span>
-              </div>
-            </div>
-
-            {/* Slide Card 2 */}
-            <div className="bg-white text-gray-900 rounded-3xl p-6 md:p-8 shadow-xl flex flex-col justify-between hover:scale-[1.02] transition-transform duration-300">
-              <div>
-                <div className="flex gap-1 mb-4 text-[#2ebd59]">
-                  <Star fill="currentColor" size={16} />
-                  <Star fill="currentColor" size={16} />
-                  <Star fill="currentColor" size={16} />
-                  <Star fill="currentColor" size={16} />
-                  <Star fill="currentColor" size={16} />
-                </div>
-                <h4 className="font-extrabold text-lg mb-2 text-[#0f1711]">Olivia Jenkins</h4>
-                <p className="text-gray-600 text-sm leading-relaxed font-medium">
-                  "If you're wondering how you can help your social media accounts get more attention fast, this is it! No need to wait for a long time either because SMM services on this panel are delivered super quickly. The services are sooo cheap too."
-                </p>
-              </div>
-              <div className="mt-6 pt-4 border-t border-gray-100 flex items-center justify-between">
-                <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">Influencer</span>
-                <span className="text-xs font-bold text-[#2ebd59] flex items-center gap-1">🟢 Verified Buyer</span>
-              </div>
-            </div>
-
-          </div>
-
-          {/* Pagination Indicators matching Image 1 pagination dots */}
-          <div className="flex justify-center gap-2 mt-10">
-            <span className="w-2.5 h-2.5 rounded-full bg-white cursor-pointer opacity-100"></span>
-            <span className="w-2.5 h-2.5 rounded-full bg-white/40 cursor-pointer hover:bg-white/70"></span>
-            <span className="w-2.5 h-2.5 rounded-full bg-white/40 cursor-pointer hover:bg-white/70"></span>
-          </div>
-
-        </div>
-      </section>
-
       {/* --- WHY CHOOSE US SECTION (Image 2 Parity) --- */}
       <section id="features" className="py-24 bg-[var(--app-bg)] relative z-10">
         <div className="max-w-7xl mx-auto px-6">
@@ -408,51 +329,103 @@ const LandingPage: React.FC<LandingProps> = ({ onGetStarted }) => {
                 </p>
             </div>
 
-            {/* Elegant 4-card layout as shown on Image 2 with soft-green icon backgrounds */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+            {/* Elegant 4-card layout with gorgeous, soft-green pastel icon containers and clean tags */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 md:gap-8">
               
               {/* Card 1 */}
-              <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-6 md:p-8 rounded-3xl shadow-sm hover:shadow-md hover:border-[var(--app-accent)] transition-all group">
-                <div className="w-16 h-16 bg-[#ebf7ed] dark:bg-[#122316] rounded-2xl flex items-center justify-center mb-6 text-[var(--app-accent)] group-hover:scale-105 transition-transform">
-                  <Zap size={28} />
+              <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-6 md:p-8 rounded-3xl shadow-[0_4px_20px_rgba(46,189,89,0.02)] hover:shadow-[0_20px_40px_rgba(46,189,89,0.06)] hover:-translate-y-1.5 hover:border-[var(--app-accent)] transition-all duration-300 relative overflow-hidden group">
+                <div className="absolute top-0 right-0 h-24 w-24 bg-gradient-to-br from-[var(--app-accent)] to-transparent opacity-[0.03] rounded-bl-full pointer-events-none"></div>
+                
+                <div className="flex justify-between items-start mb-6">
+                  <div className="w-12 h-12 bg-[var(--app-accent)]/10 rounded-2xl flex items-center justify-center text-[var(--app-accent)] group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300 shadow-sm">
+                    <Zap size={22} className="animate-pulse" />
+                  </div>
+                  <span className="bg-[var(--app-accent)]/10 text-[var(--app-accent)] text-[9px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider border border-[var(--app-accent)]/10">
+                    ✨ UNMATCHED
+                  </span>
                 </div>
-                <h3 className="text-lg font-black text-[var(--app-text)] mb-2 font-sans">Superb quality</h3>
-                <p className="text-[var(--app-text-muted)] text-sm leading-relaxed">
-                  The best SMM services you can find on the market.
+                
+                <h3 className="text-lg font-black text-[var(--app-text)] mb-2 font-sans tracking-tight">Superb quality</h3>
+                <p className="text-[var(--app-text-muted)] text-xs md:text-sm leading-relaxed mb-6 font-medium">
+                  Direct premium servers yielding elite high-retention metrics with zero drops & real, authentic organic traffic.
                 </p>
+                
+                <div className="pt-4 border-t border-[var(--app-border)] flex items-center justify-between text-[11px] font-bold text-[var(--app-text-muted)]">
+                  <span>Accuracy</span>
+                  <span className="text-[var(--app-accent)] font-extrabold bg-[var(--app-accent)]/10 px-2.5 py-0.5 rounded-md">99.9%</span>
+                </div>
               </div>
 
               {/* Card 2 */}
-              <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-6 md:p-8 rounded-3xl shadow-sm hover:shadow-md hover:border-[var(--app-accent)] transition-all group">
-                <div className="w-16 h-16 bg-[#ebf7ed] dark:bg-[#122316] rounded-2xl flex items-center justify-center mb-6 text-[var(--app-accent)] group-hover:scale-105 transition-transform">
-                  <CreditCard size={28} />
+              <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-6 md:p-8 rounded-3xl shadow-[0_4px_20px_rgba(46,189,89,0.02)] hover:shadow-[0_20px_40px_rgba(46,189,89,0.06)] hover:-translate-y-1.5 hover:border-[var(--app-accent)] transition-all duration-300 relative overflow-hidden group">
+                <div className="absolute top-0 right-0 h-24 w-24 bg-gradient-to-br from-[var(--app-accent)] to-transparent opacity-[0.03] rounded-bl-full pointer-events-none"></div>
+                
+                <div className="flex justify-between items-start mb-6">
+                  <div className="w-12 h-12 bg-[var(--app-accent)]/10 rounded-2xl flex items-center justify-center text-[var(--app-accent)] group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300 shadow-sm">
+                    <CreditCard size={22} />
+                  </div>
+                  <span className="bg-[var(--app-accent)]/10 text-[var(--app-accent)] text-[9px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider border border-[var(--app-accent)]/10">
+                    🔒 SECURE
+                  </span>
                 </div>
-                <h3 className="text-lg font-black text-[var(--app-text)] mb-2 font-sans">Different payment options</h3>
-                <p className="text-[var(--app-text-muted)] text-sm leading-relaxed">
-                  You can add funds via a payment option you prefer.
+                
+                <h3 className="text-lg font-black text-[var(--app-text)] mb-2 font-sans tracking-tight">Flexible payments</h3>
+                <p className="text-[var(--app-text-muted)] text-xs md:text-sm leading-relaxed mb-6 font-medium">
+                  Add funds instantly via Credit/Debit Cards, secure automated UPI, standard net banking, or decentralized crypto.
                 </p>
+                
+                <div className="pt-4 border-t border-[var(--app-border)] flex items-center justify-between text-[11px] font-bold text-[var(--app-text-muted)]">
+                  <span>Methods</span>
+                  <span className="text-[var(--app-accent)] font-extrabold bg-[var(--app-accent)]/10 px-2.5 py-0.5 rounded-md">10+ Gateways</span>
+                </div>
               </div>
 
               {/* Card 3 */}
-              <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-6 md:p-8 rounded-3xl shadow-sm hover:shadow-md hover:border-[var(--app-accent)] transition-all group">
-                <div className="w-16 h-16 bg-[#ebf7ed] dark:bg-[#122316] rounded-2xl flex items-center justify-center mb-6 text-[var(--app-accent)] group-hover:scale-105 transition-transform">
-                  <Users size={28} />
+              <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-6 md:p-8 rounded-3xl shadow-[0_4px_20px_rgba(46,189,89,0.02)] hover:shadow-[0_20px_40px_rgba(46,189,89,0.06)] hover:-translate-y-1.5 hover:border-[var(--app-accent)] transition-all duration-300 relative overflow-hidden group">
+                <div className="absolute top-0 right-0 h-24 w-24 bg-gradient-to-br from-[var(--app-accent)] to-transparent opacity-[0.03] rounded-bl-full pointer-events-none"></div>
+                
+                <div className="flex justify-between items-start mb-6">
+                  <div className="w-12 h-12 bg-[var(--app-accent)]/10 rounded-2xl flex items-center justify-center text-[var(--app-accent)] group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300 shadow-sm">
+                    <Users size={22} />
+                  </div>
+                  <span className="bg-[var(--app-accent)]/10 text-[var(--app-accent)] text-[9px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider border border-[var(--app-accent)]/10">
+                    💰 BEST PRICE
+                  </span>
                 </div>
-                <h3 className="text-lg font-black text-[var(--app-text)] mb-2 font-sans">Extra affordable</h3>
-                <p className="text-[var(--app-text-muted)] text-sm leading-relaxed">
-                  All SMM services on our panel are extra cheap.
+                
+                <h3 className="text-lg font-black text-[var(--app-text)] mb-2 font-sans tracking-tight">Extra affordable</h3>
+                <p className="text-[var(--app-text-muted)] text-xs md:text-sm leading-relaxed mb-6 font-medium">
+                  Get absolute baseline rates directly from SMM originators. We bypass middlemen so you enjoy maximum margins.
                 </p>
+                
+                <div className="pt-4 border-t border-[var(--app-border)] flex items-center justify-between text-[11px] font-bold text-[var(--app-text-muted)]">
+                  <span>Starts at</span>
+                  <span className="text-[var(--app-accent)] font-extrabold bg-[var(--app-accent)]/10 px-2.5 py-0.5 rounded-md">₹0.01 / 1k</span>
+                </div>
               </div>
 
               {/* Card 4 */}
-              <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-6 md:p-8 rounded-3xl shadow-sm hover:shadow-md hover:border-[var(--app-accent)] transition-all group">
-                <div className="w-16 h-16 bg-[#ebf7ed] dark:bg-[#122316] rounded-2xl flex items-center justify-center mb-6 text-[var(--app-accent)] group-hover:scale-105 transition-transform">
-                  <Shield size={28} />
+              <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-6 md:p-8 rounded-3xl shadow-[0_4px_20px_rgba(46,189,89,0.02)] hover:shadow-[0_20px_40px_rgba(46,189,89,0.06)] hover:-translate-y-1.5 hover:border-[var(--app-accent)] transition-all duration-300 relative overflow-hidden group">
+                <div className="absolute top-0 right-0 h-24 w-24 bg-gradient-to-br from-[var(--app-accent)] to-transparent opacity-[0.03] rounded-bl-full pointer-events-none"></div>
+                
+                <div className="flex justify-between items-start mb-6">
+                  <div className="w-12 h-12 bg-[var(--app-accent)]/10 rounded-2xl flex items-center justify-center text-[var(--app-accent)] group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300 shadow-sm">
+                    <Shield size={22} />
+                  </div>
+                  <span className="bg-[var(--app-accent)]/10 text-[var(--app-accent)] text-[9px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider border border-[var(--app-accent)]/10">
+                    ⚡ INSTANT
+                  </span>
                 </div>
-                <h3 className="text-lg font-black text-[var(--app-text)] mb-2 font-sans">Delivered quickly</h3>
-                <p className="text-[var(--app-text-muted)] text-sm leading-relaxed">
-                  You will be amazed at how speedy our order delivery is.
+                
+                <h3 className="text-lg font-black text-[var(--app-text)] mb-2 font-sans tracking-tight">Delivered quickly</h3>
+                <p className="text-[var(--app-text-muted)] text-xs md:text-sm leading-relaxed mb-6 font-medium">
+                  Orders process at high frequencies via our lightning API pipelines. Speed, accuracy, and dispatch in real-time.
                 </p>
+                
+                <div className="pt-4 border-t border-[var(--app-border)] flex items-center justify-between text-[11px] font-bold text-[var(--app-text-muted)]">
+                  <span>Dispatch</span>
+                  <span className="text-[var(--app-accent)] font-extrabold bg-[var(--app-accent)]/10 px-2.5 py-0.5 rounded-md">~3 Seconds</span>
+                </div>
               </div>
 
             </div>
@@ -471,11 +444,11 @@ const LandingPage: React.FC<LandingProps> = ({ onGetStarted }) => {
              </p>
           </div>
           
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {premiumServices.length > 0 ? premiumServices.map((service) => (
               <Card key={service.service} className="bg-[var(--app-card-bg)] hover:shadow-lg hover:-translate-y-1 transition-all duration-300 border-[var(--app-border)] hover:border-[var(--app-accent)] p-6 rounded-2xl">
                 <div className="flex justify-between items-start mb-4">
-                  <span className="bg-[#ebf7ed] dark:bg-[#122316] text-[var(--app-accent)] text-[10px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider">{service.category}</span>
+                  <span className="bg-[var(--app-accent)]/10 text-[var(--app-accent)] text-[10px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider">{service.category}</span>
                   <div className="flex items-center gap-2">
                        {service.isPremium && <span className="text-yellow-500 text-[10px] font-extrabold uppercase tracking-wide flex items-center gap-1">✨ Premium</span>}
                        <div className="w-2.5 h-2.5 rounded-full bg-[var(--app-accent)] shadow-[0_0_8px_var(--app-accent)] animate-pulse"></div>
@@ -495,7 +468,7 @@ const LandingPage: React.FC<LandingProps> = ({ onGetStarted }) => {
                </div>
             )}
           </div>
-          <div className="text-center mt-12">
+          <div className="text-center mt-12 font-sans">
               <Button onClick={onGetStarted} size="lg" className="bg-[var(--app-accent)] hover:bg-[var(--app-accent-hover)] text-white shadow-xl px-12 py-3.5 rounded-xl font-bold w-full sm:w-auto">View Rate Sheet & Join</Button>
           </div>
         </div>

@@ -615,6 +615,13 @@ export const Dashboard: React.FC = () => {
     const location = useLocation();
     const navigate = useNavigate();
     const { user } = useAuth();
+
+    // Security check: standard users should never reside on /admin paths
+    useEffect(() => {
+        if (location.pathname.startsWith('/admin')) {
+            navigate('/dashboard', { replace: true });
+        }
+    }, [location.pathname, navigate]);
     
     const view = useMemo(() => {
         const path = location.pathname.split('/').pop() || 'dashboard';
