@@ -44,6 +44,23 @@ export const ReferralSection: React.FC = () => {
         setTimeout(() => setNotification(null), 2000);
     };
 
+    const handleTransferWallet = async () => {
+        if (!user || (user.referral_balance || 0) <= 0) {
+            setNotification({ msg: "No referral balance to transfer.", type: 'error' });
+            return;
+        }
+        setLoading(true);
+        try {
+            await transferReferralBalance(user.id);
+            setNotification({ msg: `Successfully transferred ${CURRENCY_SYMBOL}${user.referral_balance.toFixed(2)} to your main wallet!`, type: 'success' });
+            getReferralStats(user.id).then(setStats);
+        } catch (err: any) {
+            setNotification({ msg: err.message || "Failed to transfer balance.", type: 'error' });
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const handleWithdraw = () => {
         if (!user || (user.referral_balance || 0) < 500) {
             setNotification({ msg: `Minimum withdrawal amount is ${CURRENCY_SYMBOL}500`, type: 'error' });
@@ -73,12 +90,22 @@ export const ReferralSection: React.FC = () => {
                         <p className="text-[var(--app-accent)] text-xs font-bold uppercase tracking-wider mb-1">Referral Wallet</p>
                         <h3 className="text-4xl font-black text-[var(--app-text)]">{CURRENCY_SYMBOL}{user?.referral_balance?.toFixed(2) || '0.00'}</h3>
                      </div>
-                     <div className="flex gap-2 mt-6 z-10">
-                        <button onClick={handleWithdraw} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg px-3 py-2 flex items-center justify-center gap-2 transition-colors border border-green-500/50">
-                            <MessageCircle size={18}/> Withdraw Funds
+                     <div className="grid grid-cols-1 gap-2 mt-6 z-10">
+                        <button 
+                            onClick={handleTransferWallet} 
+                            disabled={loading || !user || (user.referral_balance || 0) <= 0}
+                            className="w-full bg-[var(--app-accent)] hover:bg-[var(--app-accent-hover)] text-white font-bold rounded-lg px-3 py-2.5 flex items-center justify-center gap-2 transition-all border border-[var(--app-accent)]/30 disabled:opacity-50 disabled:cursor-not-allowed text-xs uppercase tracking-wider"
+                        >
+                            {loading ? "Processing..." : "Transfer to SMM Wallet"}
+                        </button>
+                        <button 
+                            onClick={handleWithdraw} 
+                            disabled={loading || !user || (user.referral_balance || 0) < 500}
+                            className="w-full bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg px-3 py-2.5 flex items-center justify-center gap-2 transition-all border border-green-500/50 disabled:opacity-50 disabled:cursor-not-allowed text-xs uppercase tracking-wider"
+                        >
+                            <MessageCircle size={14}/> Withdraw to UPI (Min ₹500)
                         </button>
                      </div>
-                     <p className="text-[10px] text-[var(--app-text-muted)] mt-2 text-center">Min Withdrawal: {CURRENCY_SYMBOL}500</p>
                 </Card>
 
                 {/* Total Referrals - Live from DB Aggregation */}

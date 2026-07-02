@@ -1189,19 +1189,20 @@ async function startServer() {
     }
   });
 
-  // Razorpay Verification
+   // Razorpay Verification
   const razorpayVerifySchema = z.object({
     razorpay_order_id: z.string().min(1),
     razorpay_payment_id: z.string().min(1),
     razorpay_signature: z.string().min(1),
-    amount: z.number().optional()
+    amount: z.number().optional(),
+    couponCode: z.string().optional()
   });
 
   app.post("/api/payments/verify", verifyAuth, async (req: any, res: any) => {
     const validation = razorpayVerifySchema.safeParse(req.body);
     if (!validation.success) return res.status(400).json({ error: "Invalid payment data" });
 
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = validation.data;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, couponCode } = validation.data;
     const secret = process.env.RAZORPAY_SECRET || "4wiJs8mHjvhbes6JRZFd35hT";
 
     if (!secret) return res.status(500).json({ error: "Payment configuration error" });
@@ -1227,13 +1228,40 @@ async function startServer() {
             amount = Number(req.body.amount || 0);
         }
 
+        let bonusAmount = 0;
+
+        if (couponCode) {
+            const cleanCode = couponCode.trim().toUpperCase();
+            const { data: c } = await supabaseAdmin.from('coupons').select('*').eq('code', cleanCode).single();
+            if (c && c.isEnabled && c.category === 'DEPOSIT' && amount >= c.minAmount) {
+                const expiryValid = !c.expiryDate || new Date(c.expiryDate) >= new Date();
+                const usedByArr = Array.isArray(c.usedBy) ? c.usedBy : [];
+                const usageValid = c.usageLimit <= 0 || usedByArr.length < c.usageLimit;
+                const notUsedByUser = !usedByArr.includes(userId);
+
+                if (expiryValid && usageValid && notUsedByUser) {
+                    if (c.type === 'PERCENTAGE') {
+                        bonusAmount = amount * (c.value / 100);
+                    } else {
+                        bonusAmount = c.value;
+                    }
+                    bonusAmount = Math.round((bonusAmount + Number.EPSILON) * 100) / 100;
+
+                    // Update coupon usedBy
+                    const updatedUsedBy = [...usedByArr, userId];
+                    await supabaseAdmin.from('coupons').update({ usedBy: updatedUsedBy }).eq('code', c.code);
+                }
+            }
+        }
+
+        const totalCredit = amount + bonusAmount;
         const txnId = `txn_${Date.now()}`;
         await supabaseAdmin.from('transactions').insert({
-            id: txnId, userId, amount, type: 'DEPOSIT', status: 'SUCCESS', method: 'RAZORPAY', paymentId: razorpay_payment_id, date: new Date().toISOString()
+            id: txnId, userId, amount: totalCredit, type: 'DEPOSIT', status: 'SUCCESS', method: 'RAZORPAY', paymentId: razorpay_payment_id, date: new Date().toISOString()
         });
         const { data: user } = await supabaseAdmin.from('users').select('balance').eq('id', userId).single();
         if (user) {
-            await supabaseAdmin.from('users').update({ balance: user.balance + amount, lastPaymentAt: new Date().toISOString() }).eq('id', userId);
+            await supabaseAdmin.from('users').update({ balance: user.balance + totalCredit, lastPaymentAt: new Date().toISOString() }).eq('id', userId);
         }
         res.json({ success: true });
       } catch (err) {
@@ -1241,6 +1269,79 @@ async function startServer() {
       }
     } else {
       res.status(400).json({ success: false, error: "Invalid signature" });
+    }
+  });
+
+  const verifyCouponSchema = z.object({
+    code: z.string(),
+    category: z.enum(['ORDER', 'DEPOSIT']),
+    amount: z.number(),
+    userId: z.string().uuid()
+  });
+
+  app.post("/api/coupons/verify", verifyAuth, async (req: any, res: any) => {
+    const validation = verifyCouponSchema.safeParse(req.body);
+    if (!validation.success) return res.status(400).json({ error: "Invalid input" });
+    
+    const { code, category, amount, userId } = validation.data;
+    if (req.user.id !== userId) return res.status(403).json({ error: "Unauthorized user mismatch" });
+    
+    try {
+        const cleanCode = code.trim().toUpperCase();
+        const { data: c, error: couponErr } = await supabaseAdmin.from('coupons').select('*').eq('code', cleanCode).single();
+        if (couponErr || !c) {
+            return res.status(400).json({ error: "This coupon doesn't exist or expired" });
+        }
+        
+        if (!c.isEnabled) {
+            return res.status(400).json({ error: "This coupon doesn't exist or expired" });
+        }
+        
+        if (c.expiryDate) {
+            const expiry = new Date(c.expiryDate);
+            if (isNaN(expiry.getTime()) || expiry < new Date()) {
+                return res.status(400).json({ error: "This coupon doesn't exist or expired" });
+            }
+        }
+        
+        if (c.category !== category) {
+            return res.status(400).json({ error: "This coupon doesn't exist or expired" });
+        }
+        
+        if (amount < c.minAmount) {
+            return res.status(400).json({ error: `Minimum amount required to use this coupon is ${c.minAmount} INR.` });
+        }
+        
+        const usedByArr = Array.isArray(c.usedBy) ? c.usedBy : [];
+        if (c.usageLimit > 0 && usedByArr.length >= c.usageLimit) {
+            return res.status(400).json({ error: "This coupon has reached its usage limit." });
+        }
+        
+        if (usedByArr.includes(userId)) {
+            return res.status(400).json({ error: "You have already used this coupon." });
+        }
+        
+        // Calculate discount
+        let discount = 0;
+        if (c.type === 'PERCENTAGE') {
+            discount = amount * (c.value / 100);
+        } else {
+            discount = c.value;
+        }
+        discount = Math.min(amount, discount);
+        discount = Math.round((discount + Number.EPSILON) * 100) / 100;
+        
+        res.json({
+            success: true,
+            coupon: {
+                code: c.code,
+                type: c.type,
+                value: c.value,
+                discount: discount
+            }
+        });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message || "Server error" });
     }
   });
 
@@ -1278,14 +1379,58 @@ async function startServer() {
         
         // Coupon Logic
         if (couponCode) {
-            const { data: c } = await supabaseAdmin.from('coupons').select('*').eq('code', couponCode).single();
-            if (c && c.isEnabled && new Date(c.expiryDate) > new Date() && (c.usageLimit === 0 || c.usedCount < c.usageLimit)) {
-                if (c.discountType === 'PERCENTAGE') finalCost = finalCost - (finalCost * (c.discountValue / 100));
-                else finalCost = finalCost - c.discountValue;
-                finalCost = Math.max(0, finalCost);
-                
-                await supabaseAdmin.from('coupons').update({ usedCount: c.usedCount + 1 }).eq('id', c.id);
+            const cleanCode = couponCode.trim().toUpperCase();
+            const { data: c, error: couponErr } = await supabaseAdmin.from('coupons').select('*').eq('code', cleanCode).single();
+            if (couponErr || !c) {
+                return res.status(400).json({ error: "This coupon doesn't exist or expired" });
             }
+            
+            // Check enabled
+            if (!c.isEnabled) {
+                return res.status(400).json({ error: "This coupon doesn't exist or expired" });
+            }
+            
+            // Check expiry
+            if (c.expiryDate) {
+                const expiry = new Date(c.expiryDate);
+                if (isNaN(expiry.getTime()) || expiry < new Date()) {
+                    return res.status(400).json({ error: "This coupon doesn't exist or expired" });
+                }
+            }
+            
+            // Check category
+            if (c.category !== 'ORDER') {
+                return res.status(400).json({ error: "This coupon doesn't exist or expired" });
+            }
+            
+            // Check min amount
+            if (finalCost < c.minAmount) {
+                return res.status(400).json({ error: `Minimum amount required to use this coupon is ${c.minAmount} INR.` });
+            }
+            
+            // Check usage limit
+            const usedByArr = Array.isArray(c.usedBy) ? c.usedBy : [];
+            if (c.usageLimit > 0 && usedByArr.length >= c.usageLimit) {
+                return res.status(400).json({ error: "This coupon has reached its usage limit." });
+            }
+            
+            // Check if user has already used this coupon
+            if (usedByArr.includes(userId)) {
+                return res.status(400).json({ error: "You have already used this coupon." });
+            }
+            
+            // Apply discount (using actual type and value columns)
+            if (c.type === 'PERCENTAGE') {
+                finalCost = finalCost - (finalCost * (c.value / 100));
+            } else {
+                finalCost = finalCost - c.value;
+            }
+            finalCost = Math.max(0, finalCost);
+            finalCost = Math.round((finalCost + Number.EPSILON) * 100) / 100; // Round to 2 decimal places
+            
+            // Add user to usedBy list
+            const updatedUsedBy = [...usedByArr, userId];
+            await supabaseAdmin.from('coupons').update({ usedBy: updatedUsedBy }).eq('code', c.code);
         }
 
         if (user.balance < finalCost) return res.status(400).json({ error: "Insufficient balance." });
@@ -1313,13 +1458,26 @@ async function startServer() {
         if (user.referred_by && finalCost > 0) {
             const { data: configData } = await supabaseAdmin.from('settings').select('*').eq('id', 'global').single();
             if (configData && configData.referral_commission_percent > 0) {
-                const commission = (finalCost * configData.referral_commission_percent) / 100;
-                const { data: referrer } = await supabaseAdmin.from('users').select('id, referral_balance, total_referral_earnings').eq('id', user.referred_by).single();
-                if (referrer) {
-                    await supabaseAdmin.from('users').update({ 
-                        referral_balance: (referrer.referral_balance || 0) + commission,
-                        total_referral_earnings: (referrer.total_referral_earnings || 0) + commission
-                    }).eq('id', referrer.id);
+                const commission = Number(((finalCost * configData.referral_commission_percent) / 100).toFixed(2));
+                if (commission > 0) {
+                    const { data: referrer } = await supabaseAdmin.from('users').select('id, referral_balance, total_referral_earnings').eq('id', user.referred_by).single();
+                    if (referrer) {
+                        await supabaseAdmin.from('users').update({ 
+                            referral_balance: Number(((referrer.referral_balance || 0) + commission).toFixed(2)),
+                            total_referral_earnings: Number(((referrer.total_referral_earnings || 0) + commission).toFixed(2))
+                        }).eq('id', referrer.id);
+
+                        await supabaseAdmin.from('transactions').insert({
+                            id: `ref_com_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+                            userId: referrer.id,
+                            amount: commission,
+                            type: 'REFERRAL_COMMISSION',
+                            status: 'SUCCESS',
+                            method: 'REFERRAL',
+                            utr: `Commission from order #${orderId} by ${user.name || 'referred user'}`,
+                            date: new Date().toISOString()
+                        });
+                    }
                 }
             }
         }

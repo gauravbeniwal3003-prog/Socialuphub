@@ -95,6 +95,15 @@ const App: React.FC = () => {
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
   }, [view]);
+
+  // Capture referral code from URL and persist in localStorage so it is remembered
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ref = params.get('ref') || params.get('referral');
+    if (ref) {
+      localStorage.setItem('pending_ref_code', ref.toUpperCase());
+    }
+  }, []);
   
   // Load Config for Maintenance Mode Check
   const config = useStore('suh_config', getConfig);
@@ -643,16 +652,32 @@ const App: React.FC = () => {
         }
     }, [syncError]);
 
-    // Auto-fill referral code from URL hash
+    // Auto-fill referral code from URL hash, search query, or localStorage
     useEffect(() => {
+        // 1. Check URL Hash
         const hash = window.location.hash;
+        let code = '';
         if (hash.includes('?ref=')) {
-            const code = hash.split('?ref=')[1];
-            if (code) {
-                setRefCode(code);
-                localStorage.setItem('pending_ref_code', code);
-                setMode('REGISTER');
-            }
+            code = hash.split('?ref=')[1];
+        } else if (hash.includes('?referral=')) {
+            code = hash.split('?referral=')[1];
+        }
+        
+        // 2. Check URL Search Params if not in hash
+        if (!code) {
+            const params = new URLSearchParams(window.location.search);
+            code = params.get('ref') || params.get('referral') || '';
+        }
+
+        // 3. Check localStorage if still not found
+        if (!code) {
+            code = localStorage.getItem('pending_ref_code') || '';
+        }
+
+        if (code) {
+            setRefCode(code.toUpperCase());
+            localStorage.setItem('pending_ref_code', code.toUpperCase());
+            setMode('REGISTER');
         }
     }, []);
 

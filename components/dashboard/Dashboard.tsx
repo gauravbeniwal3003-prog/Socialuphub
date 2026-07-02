@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore, fetchServices, getConfig, placeOrder, fetchOrders, fetchTransactions, updateUserPassword, fetchCategories, handleRazorpaySuccess, calculateFinalPrice, fetchUserHistory, createRazorpayOrder } from '../../services/mockStore';
 import { useAuth } from '../../App';
+import { supabase } from '../../services/supabase';
 import { Card, Button, Input, Notification, Badge } from '../ui/Components';
 import { Service, Order, OrderStatus, GlobalConfig, Category, Transaction } from '../../types';
 import { CONTACT_WHATSAPP_URL, CURRENCY_SYMBOL, RAZORPAY_KEY_ID, RAZORPAY_MERCHANT_NAME } from '../../constants';
@@ -87,6 +88,10 @@ const NewOrderSection = () => {
     const [quantity, setQuantity] = useState(() => sessionStorage.getItem('suh_order_qty') || '');
     const [comments, setComments] = useState(() => sessionStorage.getItem('suh_order_comments') || '');
     const [coupon, setCoupon] = useState('');
+    const [couponInput, setCouponInput] = useState('');
+    const [verifiedCoupon, setVerifiedCoupon] = useState<{ code: string; type: string; value: number; discount: number } | null>(null);
+    const [couponError, setCouponError] = useState('');
+    const [verifyingCoupon, setVerifyingCoupon] = useState(false);
     const [activeFilter, setActiveFilter] = useState('All'); // For Chips
     const [searchTerm, setSearchTerm] = useState(''); // Global Search
 
@@ -183,6 +188,47 @@ const NewOrderSection = () => {
     const calculateTotal = () => { if (!selectedService || !quantity) return 0; const rate = calculateFinalPrice(selectedService, config); return (rate * parseInt(quantity)) / 1000; };
     const finalTotal = calculateTotal();
 
+    // Reset verified coupon if finalTotal changes
+    useEffect(() => {
+        setVerifiedCoupon(null);
+        setCouponError('');
+        setCoupon('');
+    }, [finalTotal]);
+
+    const handleApplyCoupon = async () => {
+        if (!user || !couponInput.trim() || finalTotal <= 0) return;
+        setVerifyingCoupon(true);
+        setCouponError('');
+        setVerifiedCoupon(null);
+        setCoupon('');
+        try {
+            const { data: { session } } = await supabase.auth.getSession();
+            const response = await fetch('/api/coupons/verify', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${session?.access_token}`
+                },
+                body: JSON.stringify({
+                    code: couponInput.trim(),
+                    category: 'ORDER',
+                    amount: finalTotal,
+                    userId: user.id
+                })
+            });
+            const res = await response.json();
+            if (!response.ok) {
+                throw new Error(res.error || "This coupon doesn't exist or expired");
+            }
+            setVerifiedCoupon(res.coupon);
+            setCoupon(res.coupon.code);
+        } catch (err: any) {
+            setCouponError(err.message || "This coupon doesn't exist or expired");
+        } finally {
+            setVerifyingCoupon(false);
+        }
+    };
+
     const handleSubmit = async () => { 
         if (!user || !selectedService) return; 
         setLoading(true); 
@@ -206,7 +252,7 @@ const NewOrderSection = () => {
             await placeOrder(user.id, selectedService.service, selectedService.name, finalLink, qtyNum, finalTotal, coupon); 
             setNotification({ msg: "Order placed successfully! It will start shortly.", type: 'success' }); 
             // Clear persistent storage on success
-            setLink(''); setQuantity(''); setCoupon(''); setComments('');
+            setLink(''); setQuantity(''); setCoupon(''); setCouponInput(''); setVerifiedCoupon(null); setComments('');
             sessionStorage.removeItem('suh_order_link');
             sessionStorage.removeItem('suh_order_qty');
             sessionStorage.removeItem('suh_order_comments');
@@ -389,12 +435,54 @@ const NewOrderSection = () => {
                             </div>
                             <div>
                                 <label className="text-xs font-bold text-[var(--app-text-muted)] mb-2 block ml-1 uppercase tracking-wider">Charge</label>
-                                <div className="w-full bg-[var(--app-bg)] border border-[var(--app-border)] rounded-xl px-4 py-3.5 text-sm text-[var(--app-text)] font-mono flex items-center justify-between">
-                                    <span className="text-[var(--app-accent)] font-black text-base">{CURRENCY_SYMBOL}{finalTotal.toFixed(2)}</span>
+                                <div className="w-full bg-[var(--app-bg)] border border-[var(--app-border)] rounded-xl px-4 py-3.5 text-sm text-[var(--app-text)] font-mono flex flex-col justify-center">
+                                    {verifiedCoupon ? (
+                                        <>
+                                            <span className="text-[var(--app-text-muted)] text-[10px] line-through font-medium">{CURRENCY_SYMBOL}{finalTotal.toFixed(2)}</span>
+                                            <span className="text-[var(--app-accent)] font-black text-base leading-none">{CURRENCY_SYMBOL}{Math.max(0, finalTotal - verifiedCoupon.discount).toFixed(2)}</span>
+                                        </>
+                                    ) : (
+                                        <span className="text-[var(--app-accent)] font-black text-base">{CURRENCY_SYMBOL}{finalTotal.toFixed(2)}</span>
+                                    )}
                                 </div>
                             </div>
                         </div>
                     </div>
+
+                    {/* Coupon Input */}
+                    {finalTotal > 0 && (
+                        <div className="bg-[var(--app-sidebar-bg)]/30 p-4 rounded-xl border border-[var(--app-border)] space-y-3 animate-in fade-in duration-300">
+                            <label className="text-xs font-bold text-[var(--app-text-muted)] block uppercase tracking-wider ml-1">Discount Coupon</label>
+                            <div className="flex gap-2">
+                                <input 
+                                    className="flex-1 bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl px-4 py-3 text-sm text-[var(--app-text)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)]/30 outline-none placeholder-[var(--app-text-muted)] uppercase font-mono" 
+                                    placeholder="ENTER COUPON CODE" 
+                                    value={couponInput} 
+                                    onChange={e => {
+                                        setCouponInput(e.target.value.toUpperCase());
+                                        setCouponError('');
+                                    }} 
+                                />
+                                <button 
+                                    type="button"
+                                    onClick={handleApplyCoupon}
+                                    disabled={verifyingCoupon || !couponInput.trim()}
+                                    className="px-5 py-3 rounded-xl bg-[var(--app-input-bg)] border border-[var(--app-border)] text-xs font-bold hover:border-[var(--app-accent)] hover:text-[var(--app-accent)] disabled:opacity-50 transition-all whitespace-nowrap text-[var(--app-text)]"
+                                >
+                                    {verifyingCoupon ? "Verifying..." : "Apply"}
+                                </button>
+                            </div>
+                            {couponError && (
+                                <p className="text-[11px] text-red-500 font-bold ml-1">{couponError}</p>
+                            )}
+                            {verifiedCoupon && (
+                                <div className="flex justify-between items-center bg-green-950/20 border border-green-900/30 p-2.5 rounded-lg text-green-400 text-xs font-bold animate-in fade-in duration-200">
+                                    <span>Coupon "{verifiedCoupon.code}" Applied!</span>
+                                    <span>-{CURRENCY_SYMBOL}{verifiedCoupon.discount.toFixed(2)} ({verifiedCoupon.value}{verifiedCoupon.type === 'PERCENTAGE' ? '%' : ' INR'})</span>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     <Button onClick={handleSubmit} isLoading={loading} className="w-full py-4 rounded-xl text-sm font-black uppercase tracking-widest shadow-lg shadow-[var(--app-accent)]/15" disabled={!selectedService || !link || !quantity}>
                         Place Order
@@ -543,6 +631,49 @@ const AddFundsSection = () => {
     const transactions = useStore('suh_transactions', fetchTransactions) as Transaction[];
     const userTransactions = useMemo(() => { if (!user) return []; return transactions.filter(t => t.userId === user.id).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 10); }, [user, transactions]);
     
+    const [couponInput, setCouponInput] = useState('');
+    const [verifiedCoupon, setVerifiedCoupon] = useState<{ code: string; type: string; value: number; discount: number } | null>(null);
+    const [couponError, setCouponError] = useState('');
+    const [verifyingCoupon, setVerifyingCoupon] = useState(false);
+
+    useEffect(() => {
+        setVerifiedCoupon(null);
+        setCouponError('');
+    }, [amount]);
+
+    const handleApplyCoupon = async () => {
+        const amtVal = parseFloat(amount);
+        if (!user || !couponInput.trim() || isNaN(amtVal) || amtVal <= 0) return;
+        setVerifyingCoupon(true);
+        setCouponError('');
+        setVerifiedCoupon(null);
+        try {
+            const { data: { session } } = await supabase.auth.getSession();
+            const response = await fetch('/api/coupons/verify', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${session?.access_token}`
+                },
+                body: JSON.stringify({
+                    code: couponInput.trim(),
+                    category: 'DEPOSIT',
+                    amount: amtVal,
+                    userId: user.id
+                })
+            });
+            const res = await response.json();
+            if (!response.ok) {
+                throw new Error(res.error || "This coupon doesn't exist or expired");
+            }
+            setVerifiedCoupon(res.coupon);
+        } catch (err: any) {
+            setCouponError(err.message || "This coupon doesn't exist or expired");
+        } finally {
+            setVerifyingCoupon(false);
+        }
+    };
+
     const handleRazorpayPayment = async () => {
         if (!user || !amount || parseFloat(amount) < 1) { setNotification({ msg: "Please enter a valid amount (Min 1 INR)", type: 'error' }); return; }
         setLoading(true);
@@ -558,9 +689,13 @@ const AddFundsSection = () => {
                 handler: async function (response: any) { 
                     try { 
                         setNotification({ msg: "Payment Verified! Adding funds...", type: 'success' }); 
-                        await handleRazorpaySuccess(user.id, parseFloat(amount), response.razorpay_payment_id, response.razorpay_order_id, response.razorpay_signature); 
-                        setNotification({ msg: `Successfully added ${CURRENCY_SYMBOL}${amount} to your wallet!`, type: 'success' }); 
+                        await handleRazorpaySuccess(user.id, parseFloat(amount), response.razorpay_payment_id, response.razorpay_order_id, response.razorpay_signature, verifiedCoupon?.code || undefined); 
+                        
+                        const bonusText = verifiedCoupon ? ` (with ${CURRENCY_SYMBOL}${verifiedCoupon.discount} coupon bonus)` : '';
+                        setNotification({ msg: `Successfully added ${CURRENCY_SYMBOL}${amount}${bonusText} to your wallet!`, type: 'success' }); 
                         setAmount(''); 
+                        setCouponInput('');
+                        setVerifiedCoupon(null);
                     } catch (e: any) { 
                         setNotification({ msg: e.message, type: 'error' }); 
                     } finally { 
@@ -583,7 +718,60 @@ const AddFundsSection = () => {
         } catch (e: any) { setNotification({ msg: e.message, type: 'error' }); setLoading(false); }
     };
 
-    return (<div className="max-w-xl mx-auto space-y-8 animate-in slide-in-from-bottom-4 duration-500 px-1 md:px-0">{notification && <Notification message={notification.msg} type={notification.type} onClose={() => setNotification(null)} />}<div className="text-center"><h2 className="text-2xl md:text-3xl font-black italic tracking-tighter text-[var(--app-text)]">ADD <span className="text-[var(--app-accent)]">FUNDS</span></h2><p className="text-[var(--app-text-muted)] text-xs md:text-sm mt-2">Instant deposit via Razorpay (UPI, Cards, Netbanking).</p></div><Card className="border-t-4 border-t-[var(--app-accent)] p-4 md:p-6"><div className="space-y-6"><div className="bg-[var(--app-accent)]/10 p-4 rounded-lg border border-[var(--app-accent)]/20 flex items-start gap-3"><ShieldCheck className="text-[var(--app-accent)] shrink-0 mt-1" /><div className="text-sm text-[var(--app-text-muted)]"><p className="font-bold text-[var(--app-text)] mb-1">Secure Payment Gateway</p><p>Your payment is processed securely by Razorpay. Funds are added instantly after success.</p></div></div><Input label="Amount (INR)" type="number" placeholder="e.g. 500" value={amount} onChange={e => setAmount(e.target.value)} /><Button onClick={handleRazorpayPayment} isLoading={loading} className="w-full neon-box bg-[var(--app-accent)] text-white hover:opacity-95" size="lg">Add Funds</Button><div className="flex justify-center gap-4 opacity-50 grayscale hover:grayscale-0 transition-all"><div className="text-[10px] md:text-xs text-[var(--app-text-muted)] text-center">Supported: UPI (GPay/PhonePe), Credit/Debit Cards, Netbanking</div></div></div></Card><div className="pt-8 border-t border-[var(--app-border)]"><h3 className="text-lg font-bold text-[var(--app-text)] mb-4 flex items-center gap-2"><Clock size={18} className="text-[var(--app-accent)]"/> Transaction History</h3><div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] rounded-xl overflow-hidden">{userTransactions.length > 0 ? (<table className="w-full text-left text-xs"><thead className="bg-[var(--app-bg)] text-[var(--app-text-muted)] uppercase font-bold"><tr><th className="px-4 py-3">Date</th><th className="px-4 py-3">ID</th><th className="px-4 py-3">Amount</th><th className="px-4 py-3 text-right">Status</th></tr></thead><tbody className="divide-y divide-[var(--app-border)]">{userTransactions.map(t => (<tr key={t.id} className="hover:bg-[var(--app-accent)]/5 transition-colors"><td className="px-4 py-3 text-[var(--app-text-muted)]">{new Date(t.date).toLocaleDateString()}</td><td className="px-4 py-3 font-mono text-[var(--app-text-muted)]">{t.paymentId || (t.id || "").substring(0,8)}</td><td className={`px-4 py-3 font-bold ${t.type === 'DEPOSIT' || t.type === 'REFUND' || t.type === 'REFERRAL_PAYOUT' || t.type === 'REFERRAL_COMMISSION' ? 'text-[var(--app-accent)]' : 'text-[var(--app-text-muted)]'}`}>{t.type === 'DEPOSIT' || t.type === 'REFUND' || t.type === 'REFERRAL_PAYOUT' || t.type === 'REFERRAL_COMMISSION' ? '+' : '-'}{CURRENCY_SYMBOL}{t.amount}</td><td className="px-4 py-3 text-right"><Badge variant={t.status === 'SUCCESS' ? 'success' : t.status === 'FAILED' ? 'danger' : 'warning'}>{t.status}</Badge></td></tr>))}</tbody></table>) : (<div className="p-8 text-center text-[var(--app-text-muted)] text-sm">No transactions found yet.</div>)}{userTransactions.length > 0 && <div className="p-2 text-center text-[10px] text-[var(--app-text-muted)] bg-black/10">Showing last 10 transactions</div>}</div></div></div>);
+    return (<div className="max-w-xl mx-auto space-y-8 animate-in slide-in-from-bottom-4 duration-500 px-1 md:px-0">{notification && <Notification message={notification.msg} type={notification.type} onClose={() => setNotification(null)} />}<div className="text-center"><h2 className="text-2xl md:text-3xl font-black italic tracking-tighter text-[var(--app-text)]">ADD <span className="text-[var(--app-accent)]">FUNDS</span></h2><p className="text-[var(--app-text-muted)] text-xs md:text-sm mt-2">Instant deposit via Razorpay (UPI, Cards, Netbanking).</p></div><Card className="border-t-4 border-t-[var(--app-accent)] p-4 md:p-6"><div className="space-y-6"><div className="bg-[var(--app-accent)]/10 p-4 rounded-lg border border-[var(--app-accent)]/20 flex items-start gap-3"><ShieldCheck className="text-[var(--app-accent)] shrink-0 mt-1" /><div className="text-sm text-[var(--app-text-muted)]"><p className="font-bold text-[var(--app-text)] mb-1">Secure Payment Gateway</p><p>Your payment is processed securely by Razorpay. Funds are added instantly after success.</p></div></div><Input label="Amount (INR)" type="number" placeholder="e.g. 500" value={amount} onChange={e => setAmount(e.target.value)} />
+    
+    {/* Deposit Coupon Input */}
+    {parseFloat(amount) > 0 && (
+        <div className="bg-[var(--app-sidebar-bg)]/30 p-4 rounded-xl border border-[var(--app-border)] space-y-3 animate-in fade-in duration-300">
+            <label className="text-xs font-bold text-[var(--app-text-muted)] block uppercase tracking-wider ml-1">Deposit Promo Code (Bonus Credit)</label>
+            <div className="flex gap-2">
+                <input 
+                    className="flex-1 bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl px-4 py-3 text-sm text-[var(--app-text)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)]/30 outline-none placeholder-[var(--app-text-muted)] uppercase font-mono" 
+                    placeholder="ENTER DEPOSIT CODE" 
+                    value={couponInput} 
+                    onChange={e => {
+                        setCouponInput(e.target.value.toUpperCase());
+                        setCouponError('');
+                    }} 
+                />
+                <button 
+                    type="button"
+                    onClick={handleApplyCoupon}
+                    disabled={verifyingCoupon || !couponInput.trim()}
+                    className="px-5 py-3 rounded-xl bg-[var(--app-input-bg)] border border-[var(--app-border)] text-xs font-bold hover:border-[var(--app-accent)] hover:text-[var(--app-accent)] disabled:opacity-50 transition-all whitespace-nowrap text-[var(--app-text)]"
+                >
+                    {verifyingCoupon ? "Verifying..." : "Apply"}
+                </button>
+            </div>
+            {couponError && (
+                <p className="text-[11px] text-red-500 font-bold ml-1">{couponError}</p>
+            )}
+            {verifiedCoupon && (
+                <div className="space-y-2 animate-in fade-in duration-200">
+                    <div className="flex justify-between items-center bg-green-950/20 border border-green-900/30 p-2.5 rounded-lg text-green-400 text-xs font-bold">
+                        <span>Deposit Coupon "{verifiedCoupon.code}" Activated!</span>
+                        <span>+{CURRENCY_SYMBOL}{verifiedCoupon.discount.toFixed(2)} Bonus ({verifiedCoupon.value}{verifiedCoupon.type === 'PERCENTAGE' ? '%' : ' INR'})</span>
+                    </div>
+                    <div className="text-xs bg-[var(--app-input-bg)] p-3 rounded-xl border border-[var(--app-border)] space-y-1 font-mono text-[var(--app-text-muted)]">
+                        <div className="flex justify-between">
+                            <span>Base Amount:</span>
+                            <span>{CURRENCY_SYMBOL}{parseFloat(amount).toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between text-[var(--app-accent)] font-bold">
+                            <span>Promo Bonus:</span>
+                            <span>+{CURRENCY_SYMBOL}{verifiedCoupon.discount.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between border-t border-[var(--app-border)] pt-1 text-[var(--app-text)] font-extrabold text-sm">
+                            <span>Total Wallet Credit:</span>
+                            <span>{CURRENCY_SYMBOL}{(parseFloat(amount) + verifiedCoupon.discount).toFixed(2)}</span>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    )}
+
+    <Button onClick={handleRazorpayPayment} isLoading={loading} className="w-full neon-box bg-[var(--app-accent)] text-white hover:opacity-95" size="lg">Add Funds</Button><div className="flex justify-center gap-4 opacity-50 grayscale hover:grayscale-0 transition-all"><div className="text-[10px] md:text-xs text-[var(--app-text-muted)] text-center">Supported: UPI (GPay/PhonePe), Credit/Debit Cards, Netbanking</div></div></div></Card><div className="pt-8 border-t border-[var(--app-border)]"><h3 className="text-lg font-bold text-[var(--app-text)] mb-4 flex items-center gap-2"><Clock size={18} className="text-[var(--app-accent)]"/> Transaction History</h3><div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] rounded-xl overflow-hidden">{userTransactions.length > 0 ? (<table className="w-full text-left text-xs"><thead className="bg-[var(--app-bg)] text-[var(--app-text-muted)] uppercase font-bold"><tr><th className="px-4 py-3">Date</th><th className="px-4 py-3">ID</th><th className="px-4 py-3">Amount</th><th className="px-4 py-3 text-right">Status</th></tr></thead><tbody className="divide-y divide-[var(--app-border)]">{userTransactions.map(t => (<tr key={t.id} className="hover:bg-[var(--app-accent)]/5 transition-colors"><td className="px-4 py-3 text-[var(--app-text-muted)]">{new Date(t.date).toLocaleDateString()}</td><td className="px-4 py-3 font-mono text-[var(--app-text-muted)]">{t.paymentId || (t.id || "").substring(0,8)}</td><td className={`px-4 py-3 font-bold ${t.type === 'DEPOSIT' || t.type === 'REFUND' || t.type === 'REFERRAL_PAYOUT' || t.type === 'REFERRAL_COMMISSION' ? 'text-[var(--app-accent)]' : 'text-[var(--app-text-muted)]'}`}>{t.type === 'DEPOSIT' || t.type === 'REFUND' || t.type === 'REFERRAL_PAYOUT' || t.type === 'REFERRAL_COMMISSION' ? '+' : '-'}{CURRENCY_SYMBOL}{t.amount}</td><td className="px-4 py-3 text-right"><Badge variant={t.status === 'SUCCESS' ? 'success' : t.status === 'FAILED' ? 'danger' : 'warning'}>{t.status}</Badge></td></tr>))}</tbody></table>) : (<div className="p-8 text-center text-[var(--app-text-muted)] text-sm">No transactions found yet.</div>)}{userTransactions.length > 0 && <div className="p-2 text-center text-[10px] text-[var(--app-text-muted)] bg-black/10">Showing last 10 transactions</div>}</div></div></div>);
 };
 
 const ProfileSection = () => {

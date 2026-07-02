@@ -316,115 +316,126 @@ const LandingPage: React.FC<LandingProps> = ({ onGetStarted }) => {
         </div>
       </section>
 
-      {/* --- WHY CHOOSE US SECTION (Image 2 Parity) --- */}
-      <section id="features" className="py-24 bg-[var(--app-bg)] relative z-10">
+      {/* --- WHY CHOOSE US SECTION (Elegant, Clean, High-Contrast Redesign) --- */}
+      <section id="features" className="py-24 bg-[var(--app-bg)] relative z-10 border-t border-[var(--app-border)]/40">
         <div className="max-w-7xl mx-auto px-6">
             
             <div className="text-center mb-16">
-                <h2 className="text-3xl md:text-4xl font-black tracking-tight mb-3 text-[var(--app-text)] uppercase text-center">
-                    Why choose us?
+                <div className="inline-flex items-center gap-2 bg-[var(--app-accent)]/10 px-4 py-1.5 rounded-full text-xs font-black text-[var(--app-accent)] uppercase tracking-wider mb-4 border border-[var(--app-accent)]/20">
+                    OUR CORE ADVANTAGES
+                </div>
+                <h2 className="text-3xl md:text-5xl font-black tracking-tight text-[var(--app-text)] uppercase font-sans">
+                    Why choose <span className="text-[var(--app-accent)]">us</span>?
                 </h2>
-                <p className="text-[var(--app-text-muted)] text-sm md:text-base max-w-lg mx-auto font-medium">
-                  Learn what makes our panel stand out on the market.
+                <p className="text-[var(--app-text-muted)] text-sm md:text-base max-w-lg mx-auto font-medium mt-3">
+                  Discover what positions our automated SMM execution platform at the pinnacle of the global industry.
                 </p>
             </div>
 
-            {/* Elegant 4-card layout with gorgeous, soft-green pastel icon containers and clean tags */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 md:gap-8">
+            {/* Elegant 4-card layout with premium typography and sophisticated glass-shadow effects */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 lg:gap-8">
               
               {/* Card 1 */}
-              <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-6 md:p-8 rounded-3xl shadow-[0_4px_20px_rgba(46,189,89,0.02)] hover:shadow-[0_20px_40px_rgba(46,189,89,0.06)] hover:-translate-y-1.5 hover:border-[var(--app-accent)] transition-all duration-300 relative overflow-hidden group">
-                <div className="absolute top-0 right-0 h-24 w-24 bg-gradient-to-br from-[var(--app-accent)] to-transparent opacity-[0.03] rounded-bl-full pointer-events-none"></div>
-                
-                <div className="flex justify-between items-start mb-6">
-                  <div className="w-12 h-12 bg-[var(--app-accent)]/10 rounded-2xl flex items-center justify-center text-[var(--app-accent)] group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300 shadow-sm">
-                    <Zap size={22} className="animate-pulse" />
+              <div className="bg-gradient-to-b from-[var(--app-card-bg)] to-[var(--app-sidebar-bg)] border border-[var(--app-border)]/80 p-6 md:p-8 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] hover:shadow-[0_25px_50px_rgba(46,189,89,0.08)] hover:-translate-y-2 hover:border-[var(--app-accent)] transition-all duration-300 relative overflow-hidden group flex flex-col justify-between">
+                <div>
+                  <div className="absolute top-0 right-0 h-32 w-32 bg-gradient-to-br from-[var(--app-accent)]/10 to-transparent opacity-0 group-hover:opacity-100 rounded-bl-full transition-all duration-500 pointer-events-none"></div>
+                  
+                  <div className="flex justify-between items-start mb-6 relative z-10">
+                    <div className="w-14 h-14 bg-gradient-to-tr from-[var(--app-accent)]/10 to-[var(--app-accent)]/5 rounded-2xl flex items-center justify-center text-[var(--app-accent)] group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300 border border-[var(--app-accent)]/20 shadow-sm">
+                      <Zap size={24} className="animate-pulse" />
+                    </div>
+                    <span className="text-[10px] font-mono tracking-widest text-[var(--app-text-muted)] font-bold uppercase opacity-60">
+                      01 / PERFORMANCE
+                    </span>
                   </div>
-                  <span className="bg-[var(--app-accent)]/10 text-[var(--app-accent)] text-[9px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider border border-[var(--app-accent)]/10">
-                    ✨ UNMATCHED
-                  </span>
+                  
+                  <h3 className="text-lg md:text-xl font-black text-[var(--app-text)] mb-3 font-sans tracking-tight">Superb quality</h3>
+                  <p className="text-[var(--app-text-muted)] text-xs md:text-sm leading-relaxed mb-6 font-medium">
+                    Direct premium tier pipelines delivering pristine organic signals with absolute zero-drops & elite audience retention metrics.
+                  </p>
                 </div>
                 
-                <h3 className="text-lg font-black text-[var(--app-text)] mb-2 font-sans tracking-tight">Superb quality</h3>
-                <p className="text-[var(--app-text-muted)] text-xs md:text-sm leading-relaxed mb-6 font-medium">
-                  Direct premium servers yielding elite high-retention metrics with zero drops & real, authentic organic traffic.
-                </p>
-                
-                <div className="pt-4 border-t border-[var(--app-border)] flex items-center justify-between text-[11px] font-bold text-[var(--app-text-muted)]">
-                  <span>Accuracy</span>
-                  <span className="text-[var(--app-accent)] font-extrabold bg-[var(--app-accent)]/10 px-2.5 py-0.5 rounded-md">99.9%</span>
+                <div className="pt-4 border-t border-[var(--app-border)]/60 flex items-center justify-between text-xs font-bold text-[var(--app-text-muted)] relative z-10">
+                  <span className="font-mono">Accuracy Metric</span>
+                  <span className="text-[var(--app-accent)] font-extrabold bg-[var(--app-accent)]/10 px-3 py-1 rounded-lg border border-[var(--app-accent)]/20">99.9%</span>
                 </div>
               </div>
 
               {/* Card 2 */}
-              <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-6 md:p-8 rounded-3xl shadow-[0_4px_20px_rgba(46,189,89,0.02)] hover:shadow-[0_20px_40px_rgba(46,189,89,0.06)] hover:-translate-y-1.5 hover:border-[var(--app-accent)] transition-all duration-300 relative overflow-hidden group">
-                <div className="absolute top-0 right-0 h-24 w-24 bg-gradient-to-br from-[var(--app-accent)] to-transparent opacity-[0.03] rounded-bl-full pointer-events-none"></div>
-                
-                <div className="flex justify-between items-start mb-6">
-                  <div className="w-12 h-12 bg-[var(--app-accent)]/10 rounded-2xl flex items-center justify-center text-[var(--app-accent)] group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300 shadow-sm">
-                    <CreditCard size={22} />
+              <div className="bg-gradient-to-b from-[var(--app-card-bg)] to-[var(--app-sidebar-bg)] border border-[var(--app-border)]/80 p-6 md:p-8 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] hover:shadow-[0_25px_50px_rgba(46,189,89,0.08)] hover:-translate-y-2 hover:border-[var(--app-accent)] transition-all duration-300 relative overflow-hidden group flex flex-col justify-between">
+                <div>
+                  <div className="absolute top-0 right-0 h-32 w-32 bg-gradient-to-br from-[var(--app-accent)]/10 to-transparent opacity-0 group-hover:opacity-100 rounded-bl-full transition-all duration-500 pointer-events-none"></div>
+                  
+                  <div className="flex justify-between items-start mb-6 relative z-10">
+                    <div className="w-14 h-14 bg-gradient-to-tr from-[var(--app-accent)]/10 to-[var(--app-accent)]/5 rounded-2xl flex items-center justify-center text-[var(--app-accent)] group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300 border border-[var(--app-accent)]/20 shadow-sm">
+                      <CreditCard size={24} />
+                    </div>
+                    <span className="text-[10px] font-mono tracking-widest text-[var(--app-text-muted)] font-bold uppercase opacity-60">
+                      02 / SECURE
+                    </span>
                   </div>
-                  <span className="bg-[var(--app-accent)]/10 text-[var(--app-accent)] text-[9px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider border border-[var(--app-accent)]/10">
-                    🔒 SECURE
-                  </span>
+                  
+                  <h3 className="text-lg md:text-xl font-black text-[var(--app-text)] mb-3 font-sans tracking-tight">Flexible payments</h3>
+                  <p className="text-[var(--app-text-muted)] text-xs md:text-sm leading-relaxed mb-6 font-medium">
+                    Deposit instantly with state-of-the-art secure automated Razorpay UPI, cards, net banking, or decentralized cryptos.
+                  </p>
                 </div>
                 
-                <h3 className="text-lg font-black text-[var(--app-text)] mb-2 font-sans tracking-tight">Flexible payments</h3>
-                <p className="text-[var(--app-text-muted)] text-xs md:text-sm leading-relaxed mb-6 font-medium">
-                  Add funds instantly via Credit/Debit Cards, secure automated UPI, standard net banking, or decentralized crypto.
-                </p>
-                
-                <div className="pt-4 border-t border-[var(--app-border)] flex items-center justify-between text-[11px] font-bold text-[var(--app-text-muted)]">
-                  <span>Methods</span>
-                  <span className="text-[var(--app-accent)] font-extrabold bg-[var(--app-accent)]/10 px-2.5 py-0.5 rounded-md">10+ Gateways</span>
+                <div className="pt-4 border-t border-[var(--app-border)]/60 flex items-center justify-between text-xs font-bold text-[var(--app-text-muted)] relative z-10">
+                  <span className="font-mono">Processing</span>
+                  <span className="text-[var(--app-accent)] font-extrabold bg-[var(--app-accent)]/10 px-3 py-1 rounded-lg border border-[var(--app-accent)]/20">Instant</span>
                 </div>
               </div>
 
               {/* Card 3 */}
-              <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-6 md:p-8 rounded-3xl shadow-[0_4px_20px_rgba(46,189,89,0.02)] hover:shadow-[0_20px_40px_rgba(46,189,89,0.06)] hover:-translate-y-1.5 hover:border-[var(--app-accent)] transition-all duration-300 relative overflow-hidden group">
-                <div className="absolute top-0 right-0 h-24 w-24 bg-gradient-to-br from-[var(--app-accent)] to-transparent opacity-[0.03] rounded-bl-full pointer-events-none"></div>
-                
-                <div className="flex justify-between items-start mb-6">
-                  <div className="w-12 h-12 bg-[var(--app-accent)]/10 rounded-2xl flex items-center justify-center text-[var(--app-accent)] group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300 shadow-sm">
-                    <Users size={22} />
+              <div className="bg-gradient-to-b from-[var(--app-card-bg)] to-[var(--app-sidebar-bg)] border border-[var(--app-border)]/80 p-6 md:p-8 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] hover:shadow-[0_25px_50px_rgba(46,189,89,0.08)] hover:-translate-y-2 hover:border-[var(--app-accent)] transition-all duration-300 relative overflow-hidden group flex flex-col justify-between">
+                <div>
+                  <div className="absolute top-0 right-0 h-32 w-32 bg-gradient-to-br from-[var(--app-accent)]/10 to-transparent opacity-0 group-hover:opacity-100 rounded-bl-full transition-all duration-500 pointer-events-none"></div>
+                  
+                  <div className="flex justify-between items-start mb-6 relative z-10">
+                    <div className="w-14 h-14 bg-gradient-to-tr from-[var(--app-accent)]/10 to-[var(--app-accent)]/5 rounded-2xl flex items-center justify-center text-[var(--app-accent)] group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300 border border-[var(--app-accent)]/20 shadow-sm">
+                      <Users size={24} />
+                    </div>
+                    <span className="text-[10px] font-mono tracking-widest text-[var(--app-text-muted)] font-bold uppercase opacity-60">
+                      03 / VALUATION
+                    </span>
                   </div>
-                  <span className="bg-[var(--app-accent)]/10 text-[var(--app-accent)] text-[9px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider border border-[var(--app-accent)]/10">
-                    💰 BEST PRICE
-                  </span>
+                  
+                  <h3 className="text-lg md:text-xl font-black text-[var(--app-text)] mb-3 font-sans tracking-tight">Extra affordable</h3>
+                  <p className="text-[var(--app-text-muted)] text-xs md:text-sm leading-relaxed mb-6 font-medium">
+                    We bypass middle-men to serve baseline rates directly from SMM originators, guaranteeing your pricing yields maximum profit.
+                  </p>
                 </div>
                 
-                <h3 className="text-lg font-black text-[var(--app-text)] mb-2 font-sans tracking-tight">Extra affordable</h3>
-                <p className="text-[var(--app-text-muted)] text-xs md:text-sm leading-relaxed mb-6 font-medium">
-                  Get absolute baseline rates directly from SMM originators. We bypass middlemen so you enjoy maximum margins.
-                </p>
-                
-                <div className="pt-4 border-t border-[var(--app-border)] flex items-center justify-between text-[11px] font-bold text-[var(--app-text-muted)]">
-                  <span>Starts at</span>
-                  <span className="text-[var(--app-accent)] font-extrabold bg-[var(--app-accent)]/10 px-2.5 py-0.5 rounded-md">₹0.01 / 1k</span>
+                <div className="pt-4 border-t border-[var(--app-border)]/60 flex items-center justify-between text-xs font-bold text-[var(--app-text-muted)] relative z-10">
+                  <span className="font-mono">Starts From</span>
+                  <span className="text-[var(--app-accent)] font-extrabold bg-[var(--app-accent)]/10 px-3 py-1 rounded-lg border border-[var(--app-accent)]/20">₹0.01 / 1k</span>
                 </div>
               </div>
 
               {/* Card 4 */}
-              <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-6 md:p-8 rounded-3xl shadow-[0_4px_20px_rgba(46,189,89,0.02)] hover:shadow-[0_20px_40px_rgba(46,189,89,0.06)] hover:-translate-y-1.5 hover:border-[var(--app-accent)] transition-all duration-300 relative overflow-hidden group">
-                <div className="absolute top-0 right-0 h-24 w-24 bg-gradient-to-br from-[var(--app-accent)] to-transparent opacity-[0.03] rounded-bl-full pointer-events-none"></div>
-                
-                <div className="flex justify-between items-start mb-6">
-                  <div className="w-12 h-12 bg-[var(--app-accent)]/10 rounded-2xl flex items-center justify-center text-[var(--app-accent)] group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300 shadow-sm">
-                    <Shield size={22} />
+              <div className="bg-gradient-to-b from-[var(--app-card-bg)] to-[var(--app-sidebar-bg)] border border-[var(--app-border)]/80 p-6 md:p-8 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] hover:shadow-[0_25px_50px_rgba(46,189,89,0.08)] hover:-translate-y-2 hover:border-[var(--app-accent)] transition-all duration-300 relative overflow-hidden group flex flex-col justify-between">
+                <div>
+                  <div className="absolute top-0 right-0 h-32 w-32 bg-gradient-to-br from-[var(--app-accent)]/10 to-transparent opacity-0 group-hover:opacity-100 rounded-bl-full transition-all duration-500 pointer-events-none"></div>
+                  
+                  <div className="flex justify-between items-start mb-6 relative z-10">
+                    <div className="w-14 h-14 bg-gradient-to-tr from-[var(--app-accent)]/10 to-[var(--app-accent)]/5 rounded-2xl flex items-center justify-center text-[var(--app-accent)] group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300 border border-[var(--app-accent)]/20 shadow-sm">
+                      <Shield size={24} />
+                    </div>
+                    <span className="text-[10px] font-mono tracking-widest text-[var(--app-text-muted)] font-bold uppercase opacity-60">
+                      04 / AUTOMATION
+                    </span>
                   </div>
-                  <span className="bg-[var(--app-accent)]/10 text-[var(--app-accent)] text-[9px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider border border-[var(--app-accent)]/10">
-                    ⚡ INSTANT
-                  </span>
+                  
+                  <h3 className="text-lg md:text-xl font-black text-[var(--app-text)] mb-3 font-sans tracking-tight">Delivered quickly</h3>
+                  <p className="text-[var(--app-text-muted)] text-xs md:text-sm leading-relaxed mb-6 font-medium">
+                    Orders dispatch immediately via automated high-speed API pipelines. Fully dynamic delivery with active real-time status.
+                  </p>
                 </div>
                 
-                <h3 className="text-lg font-black text-[var(--app-text)] mb-2 font-sans tracking-tight">Delivered quickly</h3>
-                <p className="text-[var(--app-text-muted)] text-xs md:text-sm leading-relaxed mb-6 font-medium">
-                  Orders process at high frequencies via our lightning API pipelines. Speed, accuracy, and dispatch in real-time.
-                </p>
-                
-                <div className="pt-4 border-t border-[var(--app-border)] flex items-center justify-between text-[11px] font-bold text-[var(--app-text-muted)]">
-                  <span>Dispatch</span>
-                  <span className="text-[var(--app-accent)] font-extrabold bg-[var(--app-accent)]/10 px-2.5 py-0.5 rounded-md">~3 Seconds</span>
+                <div className="pt-4 border-t border-[var(--app-border)]/60 flex items-center justify-between text-xs font-bold text-[var(--app-text-muted)] relative z-10">
+                  <span className="font-mono">API Speed</span>
+                  <span className="text-[var(--app-accent)] font-extrabold bg-[var(--app-accent)]/10 px-3 py-1 rounded-lg border border-[var(--app-accent)]/20">~3 Seconds</span>
                 </div>
               </div>
 
@@ -527,7 +538,6 @@ const LandingPage: React.FC<LandingProps> = ({ onGetStarted }) => {
               <ul className="space-y-2 text-xs text-[var(--app-text-muted)] font-medium">
                 <li><a href="#" className="hover:text-[var(--app-accent)] transition-colors">Home</a></li>
                 <li><a href="#services" className="hover:text-[var(--app-accent)] transition-colors">Services Rate Sheet</a></li>
-                <li><a href="#testimonials" className="hover:text-[var(--app-accent)] transition-colors">Client Testimony</a></li>
                 <li><button onClick={onGetStarted} className="hover:text-[var(--app-accent)] transition-colors">Login Workspace</button></li>
               </ul>
             </div>

@@ -637,7 +637,7 @@ export const placeOrder = async (userId: string, serviceId: string, serviceName:
       throw e;
   }
 };
-export const handleRazorpaySuccess = async (userId: string, amount: number, paymentId: string, orderId?: string, signature?: string) => {
+export const handleRazorpaySuccess = async (userId: string, amount: number, paymentId: string, orderId?: string, signature?: string, couponCode?: string) => {
     try {
         const user = await checkUserSecurity(userId);
 
@@ -658,7 +658,8 @@ export const handleRazorpaySuccess = async (userId: string, amount: number, paym
                     razorpay_order_id: orderId,
                     razorpay_payment_id: paymentId,
                     razorpay_signature: signature,
-                    amount: amount
+                    amount: amount,
+                    couponCode: couponCode
                 })
             });
 
