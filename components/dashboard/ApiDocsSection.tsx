@@ -36,7 +36,14 @@ export const ApiDocsSection: React.FC = () => {
     if (backendBase) {
       return `${backendBase.replace(/\/$/, "")}/api/v2`;
     }
-    return typeof window !== 'undefined' ? `${window.location.origin}/api/v2` : `https://socialuphub-backend.onrender.com/api/v2`;
+    if (typeof window !== 'undefined') {
+      const origin = window.location.origin.toLowerCase();
+      if (origin.includes('socialuphub.in') || origin.includes('socialuphub-smm.web.app')) {
+        return 'https://socialuphub-backend.onrender.com/api/v2';
+      }
+      return `${window.location.origin}/api/v2`;
+    }
+    return `https://socialuphub-backend.onrender.com/api/v2`;
   };
 
   const apiBaseUrl = getActiveApiBaseUrl();

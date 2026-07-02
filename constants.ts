@@ -12,7 +12,18 @@ export const RAZORPAY_MERCHANT_NAME = "Social Up Hub";
 // Secret Key moved to Backend (Supabase Edge Function)
 
 // SMM API Configuration
-export const SMM_API_URL = typeof window !== 'undefined' ? `${window.location.origin}/api/v2` : "https://socialuphub-backend.onrender.com/api/v2"; // Masked SMM API URL
+export const getSmmApiUrl = (): string => {
+  if (typeof window !== 'undefined') {
+    const origin = window.location.origin.toLowerCase();
+    if (origin.includes('socialuphub.in') || origin.includes('socialuphub-smm.web.app')) {
+      return 'https://socialuphub-backend.onrender.com/api/v2';
+    }
+    return `${window.location.origin}/api/v2`;
+  }
+  return 'https://socialuphub-backend.onrender.com/api/v2';
+};
+
+export const SMM_API_URL = getSmmApiUrl(); // Masked SMM API URL
 // SMM_API_KEY moved to Backend for security
 
 // Initial fallback services (used if API fails or DB empty)

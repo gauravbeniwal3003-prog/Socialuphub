@@ -1386,6 +1386,54 @@ async function startServer() {
     }
   });
 
+  // Public auth helpers to bypass client-side RLS before login/signup
+  app.post("/api/auth/lookup", async (req: any, res: any) => {
+    const { action, value } = req.body;
+    if (!action || !value) {
+      return res.status(400).json({ error: "Missing parameters" });
+    }
+
+    try {
+      if (action === "getEmailByMobile") {
+        const { data, error } = await supabaseAdmin
+          .from('users')
+          .select('email')
+          .eq('mobile', String(value).trim())
+          .maybeSingle();
+        
+        if (error) throw error;
+        return res.json({ email: data?.email || null });
+      }
+
+      if (action === "checkUsernameUnique") {
+        const { data, error } = await supabaseAdmin
+          .from('users')
+          .select('id')
+          .eq('name', String(value).trim())
+          .maybeSingle();
+
+        if (error) throw error;
+        return res.json({ unique: !data });
+      }
+
+      if (action === "checkMobileUnique") {
+        const { data, error } = await supabaseAdmin
+          .from('users')
+          .select('id')
+          .eq('mobile', String(value).trim())
+          .maybeSingle();
+
+        if (error) throw error;
+        return res.json({ unique: !data });
+      }
+
+      return res.status(400).json({ error: "Invalid lookup action" });
+    } catch (err: any) {
+      console.error("Auth lookup error:", err);
+      return res.status(500).json({ error: "Server lookup failed" });
+    }
+  });
+
   // Synchronize/Create User Profile safely bypassing RLS
   app.post("/api/sync-user", verifyAuth, async (req: any, res: any) => {
     const { id, email } = req.user;

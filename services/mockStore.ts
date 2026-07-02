@@ -373,7 +373,14 @@ const getRenderBackendUrl = (): string => {
     } catch (e) {
         console.warn("Could not retrieve cached backend URL:", e);
     }
-    return typeof window !== 'undefined' ? window.location.origin : 'https://socialuphub-backend.onrender.com';
+    if (typeof window !== 'undefined') {
+        const origin = window.location.origin.toLowerCase();
+        if (origin.includes('socialuphub.in') || origin.includes('socialuphub-smm.web.app')) {
+            return 'https://socialuphub-backend.onrender.com';
+        }
+        return window.location.origin;
+    }
+    return 'https://socialuphub-backend.onrender.com';
 };
 
 // --- UPDATED API CALLER USING SECURE BACKEND PROXY ---
@@ -1036,8 +1043,16 @@ export const startAutoSync = () => {
 }
 export const checkUsernameUnique = async (n: string) => { 
     try {
-        const { data } = await supabase.from('users').select('id').eq('name', n); 
-        return !data || data.length === 0; 
+        const backendBase = getRenderBackendUrl();
+        const urlObj = `${backendBase.replace(/\/$/, "")}/api/auth/lookup`;
+        const response = await fetch(urlObj, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'checkUsernameUnique', value: n })
+        });
+        if (!response.ok) return true;
+        const resData = await response.json();
+        return resData.unique ?? true;
     } catch (e) {
         return true; // Assume unique on error to let DB handle it
     }
@@ -1045,13 +1060,37 @@ export const checkUsernameUnique = async (n: string) => {
 export const checkMobileUnique = async (m: string) => { 
     if (!m) return true;
     try {
-        const { data } = await supabase.from('users').select('id').eq('mobile', m); 
-        return !data || data.length === 0; 
+        const backendBase = getRenderBackendUrl();
+        const urlObj = `${backendBase.replace(/\/$/, "")}/api/auth/lookup`;
+        const response = await fetch(urlObj, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'checkMobileUnique', value: m })
+        });
+        if (!response.ok) return true;
+        const resData = await response.json();
+        return resData.unique ?? true;
     } catch (e) {
         return true;
     }
 };
-export const getEmailByMobile = async (m: string) => { const { data } = await supabase.from('users').select('email').eq('mobile', m).single(); return data?.email; };
+export const getEmailByMobile = async (m: string) => { 
+    try {
+        const backendBase = getRenderBackendUrl();
+        const urlObj = `${backendBase.replace(/\/$/, "")}/api/auth/lookup`;
+        const response = await fetch(urlObj, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'getEmailByMobile', value: m })
+        });
+        if (!response.ok) return null;
+        const resData = await response.json();
+        return resData.email;
+    } catch (e) {
+        console.error("getEmailByMobile failed:", e);
+        return null;
+    }
+};
 
 // FIXED CREATE USER DOC FUNCTION
 // This function is now a "Sync/Update Profile" function.

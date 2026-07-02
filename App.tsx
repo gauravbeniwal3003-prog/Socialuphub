@@ -8,7 +8,7 @@ import { AdminPanel } from './components/admin/AdminPanel';
 import { User, UserRole, GlobalConfig } from './types';
 import { supabase } from './services/supabase'; // Using Supabase Auth
 import { createUserDoc, checkUsernameUnique, startAutoSync, checkMobileUnique, getEmailByMobile, getConfig, useStore } from './services/mockStore';
-import { ShieldAlert, Clock, LogOut, Wrench } from 'lucide-react';
+import { ShieldAlert, Clock, LogOut, Wrench, AlertCircle, ChevronDown, ChevronUp, Terminal, AlertTriangle, HelpCircle, RefreshCw } from 'lucide-react';
 import { Logo } from './components/ui/Logo';
 
 const ScrollToTop: React.FC = () => {
@@ -175,7 +175,17 @@ const App: React.FC = () => {
               const fallbackMobile = session.user.user_metadata?.phone || "";
 
               // Sync user on the backend safely bypassing client-side RLS policies and race conditions
-              const backendBase = config?.renderBackendUrl?.trim() || window.location.origin;
+              const getActiveBackendUrl = () => {
+                  if (config?.renderBackendUrl?.trim()) {
+                      return config.renderBackendUrl.trim();
+                  }
+                  const origin = window.location.origin.toLowerCase();
+                  if (origin.includes('socialuphub.in') || origin.includes('socialuphub-smm.web.app')) {
+                      return 'https://socialuphub-backend.onrender.com';
+                  }
+                  return window.location.origin;
+              };
+              const backendBase = getActiveBackendUrl();
               const syncUrl = `${backendBase.replace(/\/$/, "")}/api/sync-user`;
               const response = await fetch(syncUrl, {
                   method: 'POST',
@@ -381,6 +391,23 @@ const App: React.FC = () => {
       setView('LANDING'); 
   };
 
+  interface EnhancedError {
+    message: string;
+    code?: string;
+    details?: string;
+    timestamp: string;
+    diagnostics?: {
+      userAgent: string;
+      origin: string;
+      backendUrl: string;
+      supabaseUrl: string;
+      isWebView: boolean;
+      isIframe: boolean;
+      likelyCause: string;
+      recommendation: string;
+    };
+  }
+
   const AuthModal = () => {
     const [identifier, setIdentifier] = useState(''); 
     const [email, setEmail] = useState('');
@@ -389,12 +416,126 @@ const App: React.FC = () => {
     const [mobile, setMobile] = useState('');
     const [refCode, setRefCode] = useState(''); // New State for Referral Code
     const [mode, setMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
-    const [error, setError] = useState(syncError || '');
+    const [error, setError] = useState<EnhancedError | null>(null);
     const [loading, setLoading] = useState(false);
+    const [showDiagnostics, setShowDiagnostics] = useState(false);
+    const [isTestingBackend, setIsTestingBackend] = useState(false);
+    const [backendStatus, setBackendStatus] = useState<'IDLE' | 'WAKING' | 'ONLINE' | 'ERROR'>('IDLE');
+    const [backendPingTime, setBackendPingTime] = useState<number | null>(null);
+
+    const analyzeError = (err: any): EnhancedError => {
+      const errMsg = err?.message || String(err);
+      const userAgent = navigator.userAgent;
+      const isWebView = /FBAN|FBAV|Instagram|Twitter|LinkedIn|Pinterest|Snapchat|Slack|MicroMessenger|WhatsApp|Line|FB_IAB|FBSS/i.test(userAgent) || 
+                        ( /iPhone|iPad|iPod/i.test(userAgent) && !/Safari/i.test(userAgent) ) ||
+                        ( /Android/i.test(userAgent) && /wv/i.test(userAgent) );
+      const isIframe = window.self !== window.top;
+      
+      let likelyCause = "An unknown error occurred during authentication.";
+      let recommendation = "Please try again or contact support if the issue persists.";
+      
+      const lowerMsg = errMsg.toLowerCase();
+      if (lowerMsg.includes("disallowed_useragent") || lowerMsg.includes("403") || lowerMsg.includes("disallowed user agent") || lowerMsg.includes("comply with google policies")) {
+        likelyCause = "Google Blocks OAuth logins in embedded WebViews / In-App browsers or iframes to protect user credentials.";
+        recommendation = "Open this website directly in a separate standard web browser window (e.g. Google Chrome, Safari, Firefox, or Microsoft Edge) and enable popups.";
+      } else if (lowerMsg.includes("failed to fetch") || lowerMsg.includes("networkerror") || lowerMsg.includes("load failed") || lowerMsg.includes("network error")) {
+        likelyCause = "The browser failed to communicate with the secure backend API server. This typically happens if the Render free-tier server is currently booting up (sleeping due to inactivity) or your internet connection is unstable.";
+        recommendation = "Please wait 30-40 seconds for the backend server to wake up, and click the Login/Register button again.";
+      } else if (lowerMsg.includes("invalid login credentials") || lowerMsg.includes("invalid credentials")) {
+        likelyCause = "The password entered is incorrect, or no user exists with this email / phone number.";
+        recommendation = "Double-check your email/phone number and password. If you don't have an account, switch to 'Register' mode to create one.";
+      } else if (lowerMsg.includes("username already taken") || lowerMsg.includes("name already taken")) {
+        likelyCause = "Another user has already registered with the exact full name / username you entered.";
+        recommendation = "Please choose a slightly different full name (e.g. add a middle name, initial, or last name) to ensure unique database profile creation.";
+      } else if (lowerMsg.includes("mobile number already registered") || lowerMsg.includes("mobile_key")) {
+        likelyCause = "This 10-digit mobile number is already connected to another registered account.";
+        recommendation = "Try logging in using this mobile number instead, or use a different mobile number if you are registering a new account.";
+      } else if (lowerMsg.includes("confirm email") || lowerMsg.includes("email confirmation")) {
+        likelyCause = "Supabase Auth email confirmation is enabled on this project's dashboard, which prevents instant session creation.";
+        recommendation = "Please go to the Supabase Dashboard -> Authentication -> Providers -> Email and turn off 'Confirm Email' to allow immediate login and sync.";
+      } else if (lowerMsg.includes("user_already_exists") || lowerMsg.includes("user already exists")) {
+        likelyCause = "An account with this email address has already been registered.";
+        recommendation = "Switch to 'Login' mode and enter this email address with your password, or click Forgot Password if you need to reset it.";
+      } else if (lowerMsg.includes("weak_password") || lowerMsg.includes("password should be")) {
+        likelyCause = "The password does not meet safety requirements (e.g., must be at least 6 characters long).";
+        recommendation = "Please enter a stronger password with at least 6 characters (using combinations of letters, numbers, and symbols is recommended).";
+      } else if (lowerMsg.includes("rate limit") || lowerMsg.includes("too many requests")) {
+        likelyCause = "Too many login/registration attempts from your network within a short time window (anti-spam protection).";
+        recommendation = "Please wait 60 seconds before trying again, or try connecting through a different network/cellular data connection.";
+      } else if (lowerMsg.includes("invalid email") || lowerMsg.includes("email address is invalid")) {
+        likelyCause = "The email format you entered is incorrect.";
+        recommendation = "Double check your email address format (e.g. user@example.com) and verify there are no spaces or typos.";
+      } else if (lowerMsg.includes("user profile returned") || lowerMsg.includes("profile creation") || lowerMsg.includes("synchronize user profile")) {
+        likelyCause = "Supabase logged you in successfully, but the backend API failed to synchronize and save your custom profile metadata.";
+        recommendation = "Click register or login again, or check your internet connection to ensure our server on Render can write to the PostgreSQL database.";
+      }
+      
+      const getBackendUrl = () => {
+        if (config?.renderBackendUrl?.trim()) return config.renderBackendUrl.trim();
+        const origin = window.location.origin.toLowerCase();
+        if (origin.includes('socialuphub.in') || origin.includes('socialuphub-smm.web.app')) {
+          return 'https://socialuphub-backend.onrender.com';
+        }
+        return window.location.origin;
+      };
+
+      return {
+        message: errMsg,
+        code: err?.status || err?.code || "AUTH_ERROR",
+        details: err?.stack || "No extended trace available.",
+        timestamp: new Date().toLocaleTimeString(),
+        diagnostics: {
+          userAgent,
+          origin: window.location.origin,
+          backendUrl: getBackendUrl(),
+          supabaseUrl: (import.meta as any).env?.VITE_SUPABASE_URL || "Configured",
+          isWebView,
+          isIframe,
+          likelyCause,
+          recommendation
+        }
+      };
+    };
+
+    const testBackendConnection = async () => {
+      setIsTestingBackend(true);
+      setBackendStatus('WAKING');
+      const start = Date.now();
+      try {
+          const getActiveBackendUrl = () => {
+              if (config?.renderBackendUrl?.trim()) return config.renderBackendUrl.trim();
+              const origin = window.location.origin.toLowerCase();
+              if (origin.includes('socialuphub.in') || origin.includes('socialuphub-smm.web.app')) {
+                  return 'https://socialuphub-backend.onrender.com';
+              }
+              return window.location.origin;
+          };
+          const testUrl = `${getActiveBackendUrl().replace(/\/$/, "")}/api/health`;
+          const controller = new AbortController();
+          const id = setTimeout(() => controller.abort(), 6000); // 6s timeout for wake up
+
+          const res = await fetch(testUrl, { signal: controller.signal });
+          clearTimeout(id);
+
+          if (res.ok) {
+              setBackendStatus('ONLINE');
+              setBackendPingTime(Date.now() - start);
+          } else {
+              setBackendStatus('ERROR');
+          }
+      } catch (e) {
+          console.error("Healthcheck probe failed:", e);
+          setBackendStatus('ERROR');
+      } finally {
+          setIsTestingBackend(false);
+      }
+    };
 
     useEffect(() => {
         if (syncError) {
-            setError(syncError);
+            setError(analyzeError(new Error(syncError)));
+        } else {
+            setError(null);
         }
     }, [syncError]);
 
@@ -414,7 +555,7 @@ const App: React.FC = () => {
     const handleSubmit = async (e: React.FormEvent) => {
       e.preventDefault(); 
       
-      setError(''); setLoading(true);
+      setError(null); setLoading(true);
       try { 
           if (mode === 'REGISTER') {
               await register(email, pass, name, mobile, refCode);
@@ -422,7 +563,7 @@ const App: React.FC = () => {
               await login(identifier, pass);
           }
       } catch (err: any) { 
-          setError(err.message); 
+          setError(analyzeError(err)); 
       } finally { 
           setLoading(false); 
       }
@@ -430,7 +571,7 @@ const App: React.FC = () => {
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0a110c]/80 backdrop-blur-sm p-4">
-        <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-8 rounded-3xl w-full max-w-md shadow-2xl relative animate-in fade-in zoom-in duration-200 text-[var(--app-text)]">
+        <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-6 md:p-8 rounded-3xl w-full max-w-md shadow-2xl relative animate-in fade-in zoom-in duration-200 text-[var(--app-text)] max-h-[95vh] overflow-y-auto">
             <button onClick={() => setView('LANDING')} className="absolute top-5 right-5 text-[var(--app-text-muted)] hover:text-[var(--app-text)] text-lg">✕</button>
             <div className="flex justify-center mb-6">
                 <Logo />
@@ -450,7 +591,133 @@ const App: React.FC = () => {
                    <input className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl p-3.5 text-[var(--app-text)] placeholder-[var(--app-text-muted)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)] outline-none transition-all text-sm font-medium" placeholder="Email or Mobile Number" value={identifier} onChange={e => setIdentifier(e.target.value)} required />
                )}
                <input className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl p-3.5 text-[var(--app-text)] placeholder-[var(--app-text-muted)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)] outline-none transition-all text-sm font-medium" placeholder="Password" type="password" value={pass} onChange={e => setPass(e.target.value)} required />
-               {error && <div className="text-red-600 text-xs bg-red-50 dark:bg-red-950/20 p-3 rounded-xl border border-red-200 dark:border-red-900/40 text-center font-bold">{error}</div>}
+               
+               {error && (
+                  <div className="space-y-3">
+                    {/* Simple error text banner */}
+                    <div className="text-red-600 text-xs bg-red-50 dark:bg-red-950/20 p-3.5 rounded-xl border border-red-200 dark:border-red-900/40 font-bold flex items-start gap-2 text-left">
+                      <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold">{error.message}</p>
+                        <p className="text-[10px] text-red-500/80 dark:text-red-400/80 font-normal mt-0.5">Time: {error.timestamp}</p>
+                      </div>
+                    </div>
+
+                    {/* Live Diagnostics Toggle */}
+                    <div className="bg-neutral-50 dark:bg-neutral-900/40 border border-neutral-200 dark:border-neutral-800/60 rounded-xl p-3 text-left">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowDiagnostics(!showDiagnostics);
+                          if (!showDiagnostics && backendStatus === 'IDLE') {
+                            testBackendConnection();
+                          }
+                        }}
+                        className="w-full flex items-center justify-between text-xs font-bold text-[var(--app-text)] hover:opacity-80 transition-all"
+                      >
+                        <span className="flex items-center gap-1.5 text-[var(--app-accent)]">
+                          <Terminal className="w-3.5 h-3.5" />
+                          Live Diagnostics & Solutions
+                        </span>
+                        {showDiagnostics ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      </button>
+
+                      {showDiagnostics && (
+                        <div className="mt-3 space-y-3 text-[11px] border-t border-neutral-200 dark:border-neutral-800/60 pt-3 animate-in fade-in duration-200">
+                          
+                          {/* Diagnostic status checklist */}
+                          <div className="grid grid-cols-2 gap-2 font-medium">
+                            <div className="bg-neutral-100 dark:bg-neutral-800/40 p-2 rounded-lg border border-neutral-200/50 dark:border-neutral-800/40">
+                              <span className="text-[var(--app-text-muted)] block mb-0.5">Environment:</span>
+                              <span className="text-[var(--app-text)] font-semibold">
+                                {error.diagnostics?.isIframe ? 'Iframe Sandbox' : 'Direct Browser'}
+                              </span>
+                            </div>
+                            <div className="bg-neutral-100 dark:bg-neutral-800/40 p-2 rounded-lg border border-neutral-200/50 dark:border-neutral-800/40">
+                              <span className="text-[var(--app-text-muted)] block mb-0.5">User Agent Safe?</span>
+                              <span className={`font-semibold ${error.diagnostics?.isWebView ? 'text-amber-500' : 'text-green-500'}`}>
+                                {error.diagnostics?.isWebView ? 'WebView (Risk)' : 'Standard Web'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Backend Health Check Prober */}
+                          <div className="bg-neutral-100 dark:bg-neutral-800/40 p-2 rounded-lg border border-neutral-200/50 dark:border-neutral-800/40 flex items-center justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <span className="text-[var(--app-text-muted)] block">Backend Live Connection:</span>
+                              <span className="text-[var(--app-text)] font-semibold block truncate">
+                                {error.diagnostics?.backendUrl}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={isTestingBackend}
+                              onClick={testBackendConnection}
+                              className="flex items-center gap-1 bg-[var(--app-accent)] text-white text-[10px] px-2 py-1 rounded-md hover:opacity-90 disabled:opacity-50 transition-all font-bold shrink-0"
+                            >
+                              {isTestingBackend ? (
+                                <RefreshCw className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <RefreshCw className="w-3 h-3" />
+                              )}
+                              {backendStatus === 'IDLE' ? 'Check' : backendStatus === 'WAKING' ? 'Probing...' : 'Re-Check'}
+                            </button>
+                          </div>
+
+                          {/* Backend Status Display */}
+                          {backendStatus !== 'IDLE' && (
+                            <div className="p-2 rounded-lg text-[10px] font-bold flex items-center gap-1.5 bg-neutral-100 dark:bg-neutral-800/40">
+                              <span className="text-[var(--app-text-muted)] font-medium">Status Result:</span>
+                              {backendStatus === 'ONLINE' && (
+                                <span className="text-green-500 flex items-center gap-1">
+                                  ● ACTIVE ({backendPingTime}ms) - Server is responsive & running.
+                                </span>
+                              )}
+                              {backendStatus === 'WAKING' && (
+                                <span className="text-amber-500 animate-pulse flex items-center gap-1">
+                                  ● WAKING UP - Server is starting (takes ~30s on Render).
+                                </span>
+                              )}
+                              {backendStatus === 'ERROR' && (
+                                <span className="text-red-500 flex items-center gap-1">
+                                  ● OFFLINE / TIMEOUT - Server is sleeping or unreachable.
+                                </span>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Root cause and recommendation */}
+                          <div className="bg-amber-50/50 dark:bg-amber-950/10 border border-amber-200/50 dark:border-amber-900/30 p-2.5 rounded-lg space-y-1.5 text-left text-amber-800 dark:text-amber-300">
+                            <h4 className="font-bold flex items-center gap-1">
+                              <AlertTriangle className="w-3.5 h-3.5" />
+                              Likely Root Cause:
+                            </h4>
+                            <p className="leading-relaxed font-medium">{error.diagnostics?.likelyCause}</p>
+                            
+                            <h4 className="font-bold flex items-center gap-1 pt-1.5 border-t border-amber-200/30 dark:border-amber-900/20">
+                              <HelpCircle className="w-3.5 h-3.5 text-green-500" />
+                              Step-by-Step Resolution:
+                            </h4>
+                            <p className="leading-relaxed font-semibold text-green-700 dark:text-green-400">{error.diagnostics?.recommendation}</p>
+                          </div>
+
+                          {/* Raw Error dump */}
+                          <div className="space-y-1 text-left">
+                            <span className="text-[var(--app-text-muted)] font-semibold block">Full Technical Error Log:</span>
+                            <pre className="p-2 bg-neutral-900 text-red-400 rounded-lg overflow-x-auto text-[10px] font-mono whitespace-pre-wrap max-h-[100px] border border-neutral-800">
+                              {error.message} (Code: {error.code})
+                              {"\n"}Origin: {error.diagnostics?.origin}
+                              {"\n"}UserAgent: {error.diagnostics?.userAgent}
+                              {"\n\n"}Stack trace:
+                              {"\n"}{error.details}
+                            </pre>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+               )}
+
                <button disabled={loading} className="w-full bg-[var(--app-accent)] hover:bg-[var(--app-accent-hover)] disabled:opacity-50 text-white font-black uppercase text-sm tracking-wider py-3.5 rounded-xl transition-all shadow-[0_4px_14px_rgba(46,189,89,0.3)]">{loading ? 'Processing...' : (mode === 'LOGIN' ? 'Login' : 'Register')}</button>
             </form>
 
@@ -467,6 +734,10 @@ const App: React.FC = () => {
                 <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5" referrerPolicy="no-referrer" />
                 Google
             </button>
+
+            <p className="text-[10px] text-[var(--app-text-muted)] text-center mt-3 leading-relaxed max-w-[90%] mx-auto">
+                * If Google login is blocked (403 disallowed user-agent), please open this page in a separate browser window (e.g. Chrome/Safari) and allow popups.
+            </p>
 
             <p className="text-center mt-6 text-[var(--app-text-muted)] hover:text-[var(--app-text)] text-sm cursor-pointer font-medium transition-colors" onClick={() => setMode(mode === 'LOGIN' ? 'REGISTER' : 'LOGIN')}>{mode === 'LOGIN' ? "Don't have an account? Register" : "Already have an account? Login"}</p>
         </div>
