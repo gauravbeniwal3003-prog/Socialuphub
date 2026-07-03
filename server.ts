@@ -177,255 +177,6 @@ async function startServer() {
   });
 
   // --- IN-MEMORY LOGGING API & VIEW ---
-  app.get("/api/logs-raw", (req, res) => {
-    try {
-      const now = new Date();
-      const oneHourAgo = now.getTime() - 60 * 60 * 1000;
-      
-      // Prune and sort newest first
-      const activeLogs = tempErrorLogs
-        .filter(log => new Date(log.timestamp).getTime() > oneHourAgo)
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-        
-      res.json(activeLogs);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message || "Failed to retrieve logs" });
-    }
-  });
-
-  app.post("/api/logs/clear", (req, res) => {
-    try {
-      tempErrorLogs.length = 0;
-      res.json({ success: true, message: "In-memory logs successfully cleared." });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.post("/api/logs/test", (req, res) => {
-    try {
-      logTempError("This is a manually triggered test error to verify the logs work!", "TEST_ERROR", {
-        triggeredAt: new Date().toISOString(),
-        browserInfo: req.headers['user-agent'] || 'unknown',
-        ip: req.ip || 'unknown'
-      });
-      res.json({ success: true, message: "Test log added." });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get("/logs", (req, res) => {
-    const html = `<!DOCTYPE html>
-<html lang="en" class="dark">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Social Up Hub | Live Logs Viewer</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
-    <style>
-        body { font-family: 'Inter', sans-serif; }
-        pre, code { font-family: 'JetBrains Mono', monospace; }
-    </style>
-</head>
-<body class="bg-slate-950 text-slate-100 min-h-screen">
-    <div class="max-w-6xl mx-auto px-4 py-8">
-        <!-- Header -->
-        <div class="flex flex-col md:flex-row md:items-center md:justify-between border-b border-slate-800 pb-6 mb-8 gap-4">
-            <div>
-                <div class="flex items-center gap-3">
-                    <span class="flex h-3 w-3 relative">
-                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                        <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
-                    </span>
-                    <h1 class="text-2xl font-bold tracking-tight text-white">Social Up Hub <span class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 ml-1">Live Logs</span></h1>
-                </div>
-                <p class="text-sm text-slate-400 mt-2">Temporary in-memory diagnostics console. Logs are kept locally for exactly 1 hour.</p>
-            </div>
-            <div class="flex items-center gap-3 flex-wrap">
-                <button onclick="fetchLogs()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-md text-sm font-medium transition-colors inline-flex items-center gap-2">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 3H15m3 0v5h-5"></path></svg>
-                    Refresh
-                </button>
-                <button onclick="triggerTestLog()" class="px-4 py-2 bg-emerald-950/40 text-emerald-300 hover:bg-emerald-900/50 border border-emerald-800/60 rounded-md text-sm font-medium transition-colors">
-                    Add Test Log
-                </button>
-                <button onclick="clearLogs()" class="px-4 py-2 bg-rose-950/40 text-rose-300 hover:bg-rose-900/50 border border-rose-800/60 rounded-md text-sm font-medium transition-colors">
-                    Clear Logs
-                </button>
-            </div>
-        </div>
-
-        <!-- Filter bar -->
-        <div class="bg-slate-900/50 border border-slate-800 rounded-lg p-4 mb-6 flex flex-col sm:flex-row gap-4 items-center justify-between">
-            <div class="relative w-full sm:w-72">
-                <input type="text" id="searchInput" oninput="filterLogs()" placeholder="Search logs..." class="w-full bg-slate-950 border border-slate-800 rounded-md px-3 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-slate-700">
-            </div>
-            <div class="flex gap-2 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0">
-                <button onclick="setFilter('ALL')" class="filter-btn px-3 py-1 bg-slate-800 border border-slate-700 text-xs font-medium rounded-md transition-colors text-white" data-filter="ALL">All Logs</button>
-                <button onclick="setFilter('SYNC_USER')" class="filter-btn px-3 py-1 bg-slate-900/60 border border-slate-800/80 text-xs font-medium rounded-md transition-colors text-slate-400 hover:text-white" data-filter="SYNC_USER">Sync Users</button>
-                <button onclick="setFilter('ERROR')" class="filter-btn px-3 py-1 bg-slate-900/60 border border-slate-800/80 text-xs font-medium rounded-md transition-colors text-slate-400 hover:text-white" data-filter="ERROR">Errors</button>
-                <button onclick="setFilter('CRITICAL')" class="filter-btn px-3 py-1 bg-slate-900/60 border border-slate-800/80 text-xs font-medium rounded-md transition-colors text-slate-400 hover:text-white" data-filter="CRITICAL">Critical</button>
-            </div>
-        </div>
-
-        <!-- System warning when empty -->
-        <div id="noLogsView" class="hidden flex flex-col items-center justify-center py-16 border border-dashed border-slate-800 rounded-xl bg-slate-900/20">
-            <svg class="w-12 h-12 text-slate-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
-            <p class="text-slate-400 text-sm">No logs recorded in the last hour.</p>
-            <p class="text-xs text-slate-600 mt-1">If logins fail, the error details will appear here immediately.</p>
-        </div>
-
-        <!-- Logs Container -->
-        <div id="logsContainer" class="space-y-4"></div>
-    </div>
-
-    <script>
-        let allLogs = [];
-        let currentFilter = 'ALL';
-
-        async function fetchLogs() {
-            try {
-                const res = await fetch('/api/logs-raw');
-                allLogs = await res.json();
-                renderLogs();
-            } catch (err) {
-                console.error("Failed to fetch logs:", err);
-            }
-        }
-
-        function setFilter(filter) {
-            currentFilter = filter;
-            document.querySelectorAll('.filter-btn').forEach(btn => {
-                if (btn.getAttribute('data-filter') === filter) {
-                    btn.classList.add('bg-slate-800', 'border-slate-700', 'text-white');
-                    btn.classList.remove('bg-slate-900/60', 'border-slate-800/80', 'text-slate-400');
-                } else {
-                    btn.classList.remove('bg-slate-800', 'border-slate-700', 'text-white');
-                    btn.classList.add('bg-slate-900/60', 'border-slate-800/80', 'text-slate-400');
-                }
-            });
-            renderLogs();
-        }
-
-        function filterLogs() {
-            renderLogs();
-        }
-
-        async function clearLogs() {
-            if (!confirm("Are you sure you want to clear the in-memory log list?")) return;
-            try {
-                await fetch('/api/logs/clear', { method: 'POST' });
-                fetchLogs();
-            } catch (err) {
-                console.error(err);
-            }
-        }
-
-        async function triggerTestLog() {
-            try {
-                await fetch('/api/logs/test', { method: 'POST' });
-                fetchLogs();
-            } catch (err) {
-                console.error(err);
-            }
-        }
-
-        function timeSince(dateString) {
-            const date = new Date(dateString);
-            const seconds = Math.floor((new Date() - date) / 1000);
-            if (seconds < 5) return 'Just now';
-            if (seconds < 60) return seconds + 's ago';
-            const minutes = Math.floor(seconds / 60);
-            if (minutes < 60) return minutes + 'm ago';
-            return date.toLocaleTimeString();
-        }
-
-        function toggleDetails(index) {
-            const el = document.getElementById('details-' + index);
-            const icon = document.getElementById('icon-' + index);
-            if (el.classList.contains('hidden')) {
-                el.classList.remove('hidden');
-                icon.style.transform = 'rotate(90deg)';
-            } else {
-                el.classList.add('hidden');
-                icon.style.transform = 'rotate(0deg)';
-            }
-        }
-
-        function renderLogs() {
-            const container = document.getElementById('logsContainer');
-            const searchVal = document.getElementById('searchInput').value.toLowerCase();
-            
-            let filtered = allLogs;
-            
-            if (currentFilter !== 'ALL') {
-                filtered = filtered.filter(l => l.type === currentFilter);
-            }
-            
-            if (searchVal) {
-                filtered = filtered.filter(l => 
-                    l.message.toLowerCase().includes(searchVal) || 
-                    (l.type && l.type.toLowerCase().includes(searchVal)) ||
-                    (l.details && JSON.stringify(l.details).toLowerCase().includes(searchVal))
-                );
-            }
-
-            if (filtered.length === 0) {
-                document.getElementById('noLogsView').classList.remove('hidden');
-                container.innerHTML = '';
-                return;
-            } else {
-                document.getElementById('noLogsView').classList.add('hidden');
-            }
-
-            container.innerHTML = filtered.map((log, index) => {
-                let badgeClass = "bg-slate-800 text-slate-300 border-slate-700";
-                if (log.type === "CRITICAL") badgeClass = "bg-rose-950/50 text-rose-300 border-rose-900/60";
-                else if (log.type === "SYNC_USER") badgeClass = "bg-amber-950/50 text-amber-300 border-amber-900/60";
-                else if (log.type === "TEST_ERROR") badgeClass = "bg-emerald-950/50 text-emerald-300 border-emerald-900/60";
-
-                const hasDetails = log.details && Object.keys(log.details).length > 0;
-
-                return \`
-                    <div class="bg-slate-900/60 border border-slate-800 rounded-lg overflow-hidden transition-all hover:border-slate-700/80">
-                        <div class="p-4 flex items-start justify-between gap-4 \\\${hasDetails ? 'cursor-pointer select-none' : ''}" \\\${hasDetails ? \\\`onclick="toggleDetails(\\\${index})"\\\` : ''}>
-                            <div class="flex items-start gap-3">
-                                \\\${hasDetails ? \\\`
-                                    <svg id="icon-\\\${index}" class="w-4 h-4 text-slate-500 mt-1 transition-transform" style="transform: rotate(0deg);" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"></path></svg>
-                                \\\` : '<div class="w-4"></div>'}
-                                <div>
-                                    <div class="flex items-center gap-2 flex-wrap">
-                                        <span class="text-xs font-mono px-2 py-0.5 rounded border \\\${badgeClass}">\\\${log.type}</span>
-                                        <span class="text-xs text-slate-500">\\\${timeSince(log.timestamp)}</span>
-                                        <span class="text-xs text-slate-600 font-mono">\\\${new Date(log.timestamp).toLocaleTimeString()}</span>
-                                    </div>
-                                    <p class="text-sm font-medium text-slate-200 mt-1.5 break-all">\\\${log.message}</p>
-                                </div>
-                            </div>
-                        </div>
-                        \\\${hasDetails ? \\\`
-                            <div id="details-\\\${index}" class="hidden bg-slate-950/80 border-t border-slate-800/80 p-4">
-                                <span class="text-xs text-slate-500 font-medium block mb-2">Contextual Data & Stack Trace:</span>
-                                <pre class="text-xs text-emerald-400 bg-slate-950 p-3 rounded overflow-x-auto border border-slate-900 max-h-96"><code>\\\${JSON.stringify(log.details, null, 2)}</code></pre>
-                            </div>
-                        \\\` : ''}
-                    </div>
-                \`;
-            }).join('');
-        }
-
-        // Auto-refresh logs every 10 seconds
-        setInterval(fetchLogs, 10000);
-
-        // Initial fetch
-        fetchLogs();
-    </script>
-</body>
-</html>`;
-    res.send(html);
-  });
 
   // Initialize Razorpay lazily or safely
   let razorpay: any;
@@ -479,7 +230,7 @@ async function startServer() {
       if (isAllowed) {
         return callback(null, true);
       }
-      callback(null, true);
+      callback(new Error('Not allowed by CORS'));
     },
     credentials: true
   }));
@@ -517,7 +268,7 @@ async function startServer() {
 
   const orderLimiter = rateLimit({
     windowMs: 1 * 60 * 1000,
-    max: 500, // Increased significantly for background tasks and processing
+    max: 5, // Strict rate limit based on security audit (max 5 per min)
     message: { error: "Action rate limit exceeded. Please wait a moment." },
     keyGenerator: (req) => {
       const forwarded = req.headers['x-forwarded-for'];
@@ -533,7 +284,7 @@ async function startServer() {
 
   // --- BACKGROUND TASKS (PROCESSED ON SERVER FOR 100% RELIABILITY) ---
   
-  const SMM_API_KEY = "38086716603a82e68be330924e7327c7e130df7d"; // Use the provided working key
+  const SMM_API_KEY = process.env.SMM_API_KEY;
   const SMM_API_URL = process.env.SMM_API_URL || "https://safesmmpanel.com/api/v2";
 
   const callProvider = async (paramsObj: any) => {
@@ -1117,7 +868,14 @@ async function startServer() {
     }
 
     const { action, service, link, quantity, order } = validation.data;
-    const SMM_API_KEY = "38086716603a82e68be330924e7327c7e130df7d"; // Verified working key
+    
+    // SECURITY: Prevent public execution of 'add' action. Only the backend cron should place orders.
+    // If the frontend tries to place orders, block it.
+    if (action === 'add') {
+      return res.status(403).json({ error: "Direct order placement via proxy is disabled. Orders are processed securely by the backend." });
+    }
+
+    const SMM_API_KEY = process.env.SMM_API_KEY;
     const SMM_API_URL = process.env.SMM_API_URL || "https://safesmmpanel.com/api/v2";
 
     if (!SMM_API_KEY || SMM_API_KEY.includes("TODO")) {
@@ -1234,22 +992,16 @@ async function startServer() {
             const cleanCode = couponCode.trim().toUpperCase();
             const { data: c } = await supabaseAdmin.from('coupons').select('*').eq('code', cleanCode).single();
             if (c && c.isEnabled && c.category === 'DEPOSIT' && amount >= c.minAmount) {
-                const expiryValid = !c.expiryDate || new Date(c.expiryDate) >= new Date();
-                const usedByArr = Array.isArray(c.usedBy) ? c.usedBy : [];
-                const usageValid = c.usageLimit <= 0 || usedByArr.length < c.usageLimit;
-                const notUsedByUser = !usedByArr.includes(userId);
-
-                if (expiryValid && usageValid && notUsedByUser) {
+                // Safely use coupon
+                const { data: couponApplied } = await supabaseAdmin.rpc('use_coupon', { coupon_code: c.code, user_id: userId });
+                
+                if (couponApplied) {
                     if (c.type === 'PERCENTAGE') {
                         bonusAmount = amount * (c.value / 100);
                     } else {
                         bonusAmount = c.value;
                     }
                     bonusAmount = Math.round((bonusAmount + Number.EPSILON) * 100) / 100;
-
-                    // Update coupon usedBy
-                    const updatedUsedBy = [...usedByArr, userId];
-                    await supabaseAdmin.from('coupons').update({ usedBy: updatedUsedBy }).eq('code', c.code);
                 }
             }
         }
@@ -1259,10 +1011,10 @@ async function startServer() {
         await supabaseAdmin.from('transactions').insert({
             id: txnId, userId, amount: totalCredit, type: 'DEPOSIT', status: 'SUCCESS', method: 'RAZORPAY', paymentId: razorpay_payment_id, date: new Date().toISOString()
         });
-        const { data: user } = await supabaseAdmin.from('users').select('balance').eq('id', userId).single();
-        if (user) {
-            await supabaseAdmin.from('users').update({ balance: user.balance + totalCredit, lastPaymentAt: new Date().toISOString() }).eq('id', userId);
-        }
+        
+        await supabaseAdmin.rpc('increment_balance', { user_id: userId, amount: totalCredit });
+        await supabaseAdmin.from('users').update({ lastPaymentAt: new Date().toISOString() }).eq('id', userId);
+        
         res.json({ success: true });
       } catch (err) {
         res.status(500).json({ error: "DB update failed" });
@@ -1375,7 +1127,15 @@ async function startServer() {
         if (!user) return res.status(404).json({ error: "User not found" });
         if (user.isBanned) return res.status(403).json({ error: "User is banned" });
 
-        let finalCost = Number(originalCost);
+        // Securely calculate cost from database
+        const { data: dbService } = await supabaseAdmin.from('services').select('rate, min, max').eq('service', serviceId).single();
+        if (!dbService) return res.status(404).json({ error: "Service not found" });
+        if (quantity < dbService.min || quantity > dbService.max) {
+            return res.status(400).json({ error: `Quantity must be between ${dbService.min} and ${dbService.max}` });
+        }
+        let finalCost = (dbService.rate / 1000) * quantity;
+        finalCost = Math.round((finalCost + Number.EPSILON) * 100) / 100;
+
         
         // Coupon Logic
         if (couponCode) {
@@ -1408,15 +1168,11 @@ async function startServer() {
                 return res.status(400).json({ error: `Minimum amount required to use this coupon is ${c.minAmount} INR.` });
             }
             
-            // Check usage limit
-            const usedByArr = Array.isArray(c.usedBy) ? c.usedBy : [];
-            if (c.usageLimit > 0 && usedByArr.length >= c.usageLimit) {
-                return res.status(400).json({ error: "This coupon has reached its usage limit." });
-            }
+            // Safely use coupon
+            const { data: couponApplied } = await supabaseAdmin.rpc('use_coupon', { coupon_code: c.code, user_id: userId });
             
-            // Check if user has already used this coupon
-            if (usedByArr.includes(userId)) {
-                return res.status(400).json({ error: "You have already used this coupon." });
+            if (!couponApplied) {
+                return res.status(400).json({ error: "Coupon is invalid, expired, or has reached its usage limit." });
             }
             
             // Apply discount (using actual type and value columns)
@@ -1427,20 +1183,14 @@ async function startServer() {
             }
             finalCost = Math.max(0, finalCost);
             finalCost = Math.round((finalCost + Number.EPSILON) * 100) / 100; // Round to 2 decimal places
-            
-            // Add user to usedBy list
-            const updatedUsedBy = [...usedByArr, userId];
-            await supabaseAdmin.from('coupons').update({ usedBy: updatedUsedBy }).eq('code', c.code);
         }
-
-        if (user.balance < finalCost) return res.status(400).json({ error: "Insufficient balance." });
 
         const orderId = `ord_${Date.now()}`;
         const txnId = `txn_${Date.now()}`;
 
-        // Update Balance
-        const { error: balErr } = await supabaseAdmin.from('users').update({ balance: user.balance - finalCost }).eq('id', userId);
-        if (balErr) throw balErr;
+        // Safely Deduct Balance
+        const { data: success, error: balErr } = await supabaseAdmin.rpc('decrement_balance', { user_id: userId, amount: finalCost });
+        if (balErr || !success) return res.status(400).json({ error: "Insufficient balance." });
 
         // Insert Order
         const { error: orderErr } = await supabaseAdmin.from('orders').insert({
@@ -1460,24 +1210,17 @@ async function startServer() {
             if (configData && configData.referral_commission_percent > 0) {
                 const commission = Number(((finalCost * configData.referral_commission_percent) / 100).toFixed(2));
                 if (commission > 0) {
-                    const { data: referrer } = await supabaseAdmin.from('users').select('id, referral_balance, total_referral_earnings').eq('id', user.referred_by).single();
-                    if (referrer) {
-                        await supabaseAdmin.from('users').update({ 
-                            referral_balance: Number(((referrer.referral_balance || 0) + commission).toFixed(2)),
-                            total_referral_earnings: Number(((referrer.total_referral_earnings || 0) + commission).toFixed(2))
-                        }).eq('id', referrer.id);
-
-                        await supabaseAdmin.from('transactions').insert({
-                            id: `ref_com_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-                            userId: referrer.id,
-                            amount: commission,
-                            type: 'REFERRAL_COMMISSION',
-                            status: 'SUCCESS',
-                            method: 'REFERRAL',
-                            utr: `Commission from order #${orderId} by ${user.name || 'referred user'}`,
-                            date: new Date().toISOString()
-                        });
-                    }
+                    await supabaseAdmin.rpc('add_referral_commission', { referrer_id: user.referred_by, commission: commission });
+                    await supabaseAdmin.from('transactions').insert({
+                        id: `ref_com_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+                        userId: user.referred_by,
+                        amount: commission,
+                        type: 'REFERRAL_COMMISSION',
+                        status: 'SUCCESS',
+                        method: 'REFERRAL',
+                        utr: `Commission from order #${orderId} by ${user.name || 'referred user'}`,
+                        date: new Date().toISOString()
+                    });
                 }
             }
         }
@@ -1516,29 +1259,25 @@ async function startServer() {
   app.post("/api/users/transfer-referral", verifyAuth, async (req: any, res: any) => {
     const userId = req.user.id;
     try {
-        const { data: user } = await supabaseAdmin.from('users').select('*').eq('id', userId).single();
-        if (!user || user.referral_balance <= 0) return res.status(400).json({ error: "No referral earnings to transfer." });
+        const { data: transferAmount, error: rpcErr } = await supabaseAdmin.rpc('transfer_referral_balance', { user_id: userId });
+        if (rpcErr) throw rpcErr;
         
-        const amount = user.referral_balance;
-        
-        const { error: updateErr } = await supabaseAdmin.from('users').update({
-            balance: user.balance + amount,
-            referral_balance: 0
-        }).eq('id', userId);
-        
-        if (updateErr) throw updateErr;
+        if (!transferAmount || transferAmount <= 0) return res.status(400).json({ error: "No referral earnings to transfer." });
         
         await supabaseAdmin.from('transactions').insert({
             id: `ref_out_${Date.now()}`,
             userId: userId,
-            amount: amount,
+            amount: transferAmount,
             type: 'REFERRAL_PAYOUT',
             status: 'SUCCESS',
             method: 'WALLET_TRANSFER',
             date: new Date().toISOString()
         });
         
-        res.json({ success: true, newBalance: user.balance + amount });
+        // Fetch new balance to return
+        const { data: updatedUser } = await supabaseAdmin.from('users').select('balance').eq('id', userId).single();
+        
+        res.json({ success: true, newBalance: updatedUser?.balance || 0 });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
@@ -1594,8 +1333,13 @@ async function startServer() {
 
   // Synchronize/Create User Profile safely bypassing RLS
   app.post("/api/sync-user", verifyAuth, async (req: any, res: any) => {
-    const { id, email } = req.user;
     const { name, mobile, referredByCode } = req.body;
+    const { id, email } = req.user;
+
+    // Validate lengths
+    if (name && typeof name === 'string' && name.length > 50) return res.status(400).json({ error: "Name too long." });
+    if (mobile && typeof mobile === 'string' && mobile.length > 15) return res.status(400).json({ error: "Mobile too long." });
+    if (referredByCode && typeof referredByCode === 'string' && referredByCode.length > 20) return res.status(400).json({ error: "Referral code too long." });
 
     try {
       // 1. Check if user already exists
@@ -1611,6 +1355,35 @@ async function startServer() {
         const updates: any = { lastLogin: new Date().toISOString() };
         if (name && !existingUser.name) updates.name = name;
         if (mobile && !existingUser.mobile) updates.mobile = mobile;
+
+        // If the trigger created the user but couldn't set referred_by, do it here once.
+        if (referredByCode && !existingUser.referred_by) {
+            const { data: refUser } = await supabaseAdmin
+              .from('users')
+              .select('id')
+              .eq('referral_code', referredByCode.toUpperCase())
+              .maybeSingle();
+            
+            if (refUser && refUser.id !== id) {
+              updates.referred_by = refUser.id;
+              
+              // Give signup bonus if enabled
+              const { data: configData } = await supabaseAdmin.from('settings').select('*').eq('id', 'global').single();
+              if (configData && configData.isReferralSystemEnabled && configData.referralSignupBonus > 0) {
+                 await supabaseAdmin.rpc('increment_balance', { user_id: id, amount: configData.referralSignupBonus });
+                 await supabaseAdmin.from('transactions').insert({
+                    id: `ref_sign_${Date.now()}`,
+                    userId: id,
+                    amount: configData.referralSignupBonus,
+                    type: 'DEPOSIT',
+                    status: 'SUCCESS',
+                    method: 'REFERRAL',
+                    utr: 'Signup Bonus',
+                    date: new Date().toISOString()
+                 });
+              }
+            }
+        }
 
         const { data: updatedUser, error: updateErr } = await supabaseAdmin
           .from('users')

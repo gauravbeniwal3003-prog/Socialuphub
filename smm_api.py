@@ -87,8 +87,9 @@ def place_smm_request(api_url, api_key, action, **params):
 # --- EXAMPLE USAGE ---
 if __name__ == "__main__":
     # Test credentials (replace with environment variables in production)
-    API_URL = "https://safesmmpanel.com/api/v2"
-    API_KEY = "38086716603a82e68be330924e7327c7e130df7d"
+    import os
+    API_URL = os.environ.get("SMM_API_URL", "https://safesmmpanel.com/api/v2")
+    API_KEY = os.environ.get("SMM_API_KEY", "")
     
     # 1. Example: Place Order (add)
     # order_result = place_smm_request(

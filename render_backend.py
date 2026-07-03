@@ -8,9 +8,9 @@ from flask_cors import CORS
 
 # --- CONFIGURATION (Reads from Environment Variables) ---
 # Replace with your actual credentials or set them in Render Environment Panel
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://igkrcgcrvnocauccebrf.supabase.co")
-SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlna3JjZ2Nydm5vY2F1Y2NlYnJmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NjgzMDU4MCwiZXhwIjoyMDgyNDA2NTgwfQ.-529L2gcgOFrfN_VVZf6tbPyAlnRFQNQjPBOk8aGwpI")
-SMM_API_KEY = os.environ.get("SMM_API_KEY", "38086716603a82e68be330924e7327c7e130df7d")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+SMM_API_KEY = os.environ.get("SMM_API_KEY", "")
 SMM_API_URL = os.environ.get("SMM_API_URL", "https://safesmmpanel.com/api/v2")
 
 # Configure Logging
@@ -21,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger("SocialUpHub-Render-Backend")
 
 app = Flask(__name__)
-CORS(app)  # Enables cross-origin requests from your frontend easily
+CORS(app, resources={r"/api/*": {"origins": ["https://socialuphub.com", "https://socialuphub.in", "https://socialuphub-smm.web.app"]}})  # Secure CORS configuration
 
 # --- SUPABASE REST HELPER FUNCTIONS ---
 def get_supabase_headers():
@@ -41,6 +41,16 @@ def supabase_get(table, params):
     except Exception as e:
         logger.error(f"Supabase GET Error on table '{table}': {str(e)}")
         return None
+
+def supabase_rpc(rpc_name, body):
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/rpc/{rpc_name}"
+        response = requests.post(url, headers=get_supabase_headers(), json=body, timeout=15)
+        response.raise_for_status()
+        return response.json() or True
+    except Exception as e:
+        logger.error(f"Supabase RPC Error \"{rpc_name}\": {str(e)}")
+        return False
 
 def supabase_patch(table, filters, body):
     try:
@@ -281,6 +291,8 @@ def smm_proxy():
     """
     data = request.get_json(silent=True) or {}
     action = data.get("action")
+    if action == "add":
+        return jsonify({"error": "Direct order placement via proxy is disabled. Orders are processed securely by the backend."}), 403
     if not action:
         return jsonify({"error": "Invalid request parameters", "message": "'action' is mandatory."}), 400
     
@@ -508,7 +520,10 @@ def smm_user_api():
         # Securely deduct client account balances
         new_bal = round(user_bal - charge, 2)
         new_spent = round(float(user.get("totalSpent") or 0.0) + charge, 2)
-        supabase_patch("users", {"id": f"eq.{user_id}"}, {"balance": new_bal, "totalSpent": new_spent})
+        # Securely deduct client account balances via atomic RPC
+        success = supabase_rpc("decrement_balance", {"user_id": user_id, "amount": charge})
+        if not success:
+            return jsonify({"error": "Declined: Insufficient funds or database error."}), 200
 
         # Generate custom unique ID to satisfy database string primary key constraints
         import random
