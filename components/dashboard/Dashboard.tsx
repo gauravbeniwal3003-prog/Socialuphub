@@ -75,6 +75,7 @@ const CustomDropdown = ({ options, value, onChange, placeholder }: { options: st
 };
 
 const NewOrderSection = () => {
+    const navigate = useNavigate();
     const { user } = useAuth();
     const services = useStore('suh_services', fetchServices) as Service[];
     const categories = useStore('suh_categories', fetchCategories) as Category[];
@@ -97,6 +98,15 @@ const NewOrderSection = () => {
 
     const [notification, setNotification] = useState<{msg: string, type: 'success'|'error'} | null>(null);
     const [loading, setLoading] = useState(false);
+    const [successOrderDetails, setSuccessOrderDetails] = useState<{
+        orderId: string;
+        serviceName: string;
+        link: string;
+        quantity: number;
+        charge: number;
+        couponCode?: string;
+        discount?: number;
+    } | null>(null);
     
     // Save to SessionStorage on Change
     useEffect(() => { sessionStorage.setItem('suh_order_category', selectedCategory); }, [selectedCategory]);
@@ -249,8 +259,18 @@ const NewOrderSection = () => {
 
             const finalLink = isCustomComment && comments ? `${link}#comments=${encodeURIComponent(comments)}` : link;
 
-            await placeOrder(user.id, selectedService.service, selectedService.name, finalLink, qtyNum, finalTotal, coupon); 
-            setNotification({ msg: "Order placed successfully! It will start shortly.", type: 'success' }); 
+            const res = await placeOrder(user.id, selectedService.service, selectedService.name, finalLink, qtyNum, finalTotal, coupon); 
+            
+            setSuccessOrderDetails({
+                orderId: res?.orderId || `ord_${Date.now()}`,
+                serviceName: selectedService.name,
+                link: finalLink,
+                quantity: qtyNum,
+                charge: finalTotal,
+                couponCode: coupon || undefined,
+                discount: verifiedCoupon ? verifiedCoupon.discount : undefined
+            });
+
             // Clear persistent storage on success
             setLink(''); setQuantity(''); setCoupon(''); setCouponInput(''); setVerifiedCoupon(null); setComments('');
             sessionStorage.removeItem('suh_order_link');
@@ -496,6 +516,110 @@ const NewOrderSection = () => {
                     </Button>
                 </div>
             </div>
+
+            {/* SUCCESS BILLING RECEIPT MODAL */}
+            {successOrderDetails && (
+                <div id="success-billing-modal" className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
+                    <div className="relative bg-[var(--app-card-bg)] border border-[var(--app-border)] rounded-3xl w-full max-w-md shadow-2xl p-6 overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col">
+                        
+                        {/* Decorative Receipt Header Icon */}
+                        <div className="flex flex-col items-center text-center pb-5 border-b border-[var(--app-border)]/60">
+                            <div className="w-16 h-16 bg-green-500/10 border border-green-500/30 rounded-full flex items-center justify-center mb-3">
+                                <CheckCircle className="w-9 h-9 text-[var(--app-accent)]" />
+                            </div>
+                            <h3 className="text-xl font-extrabold text-[var(--app-text)]">Order Placed Successfully!</h3>
+                            <p className="text-xs text-[var(--app-text-muted)] mt-1">Receipt for your transaction</p>
+                        </div>
+
+                        {/* Invoice Receipt Body */}
+                        <div className="py-5 space-y-4 text-sm">
+                            <div className="flex justify-between items-center bg-[var(--app-bg)]/50 p-3 rounded-xl border border-[var(--app-border)]/40">
+                                <span className="text-xs text-[var(--app-text-muted)] font-semibold uppercase tracking-wider">Order ID</span>
+                                <span className="font-mono text-xs font-bold text-[var(--app-text)] bg-[var(--app-bg)] px-2.5 py-1 rounded border border-[var(--app-border)] select-all">
+                                    {successOrderDetails.orderId}
+                                </span>
+                            </div>
+
+                            <div className="space-y-3 px-1">
+                                <div className="flex flex-col gap-1 text-left">
+                                    <span className="text-[10px] text-[var(--app-text-muted)] font-black uppercase tracking-wider">Service Name</span>
+                                    <span className="text-xs text-[var(--app-text)] font-semibold leading-relaxed line-clamp-2">
+                                        {successOrderDetails.serviceName}
+                                    </span>
+                                </div>
+
+                                <div className="flex flex-col gap-1 text-left">
+                                    <span className="text-[10px] text-[var(--app-text-muted)] font-black uppercase tracking-wider">Target Link</span>
+                                    <a 
+                                        href={successOrderDetails.link.split('#comments=')[0]} 
+                                        target="_blank" 
+                                        rel="noreferrer" 
+                                        className="text-xs text-blue-400 hover:underline flex items-center gap-1 font-mono truncate max-w-full"
+                                    >
+                                        <ExternalLink size={12} className="shrink-0" />
+                                        <span className="truncate">{successOrderDetails.link.split('#comments=')[0]}</span>
+                                    </a>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4 pt-2">
+                                    <div className="text-left">
+                                        <span className="text-[10px] text-[var(--app-text-muted)] font-black uppercase tracking-wider block mb-0.5">Quantity</span>
+                                        <span className="text-sm font-extrabold text-[var(--app-text)] font-mono">{successOrderDetails.quantity.toLocaleString()}</span>
+                                    </div>
+                                    <div className="text-left">
+                                        <span className="text-[10px] text-[var(--app-text-muted)] font-black uppercase tracking-wider block mb-0.5">Status</span>
+                                        <span className="inline-flex items-center gap-1 text-xs font-bold text-[var(--app-accent)]">
+                                            <span className="w-1.5 h-1.5 rounded-full bg-[var(--app-accent)] animate-ping"></span>
+                                            Processing
+                                        </span>
+                                    </div>
+                                </div>
+
+                                {successOrderDetails.couponCode && (
+                                    <div className="flex justify-between items-center pt-2 border-t border-[var(--app-border)]/40 text-xs">
+                                        <span className="text-[var(--app-text-muted)] font-bold">Coupon Applied</span>
+                                        <span className="bg-green-500/10 text-[var(--app-accent)] px-2 py-0.5 rounded font-mono font-bold">
+                                            {successOrderDetails.couponCode}
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Total Charge Header */}
+                            <div className="pt-4 border-t border-dashed border-[var(--app-border)] flex justify-between items-center">
+                                <span className="font-extrabold text-[var(--app-text)] text-sm uppercase">Total Deducted</span>
+                                <span className="text-xl font-black text-[var(--app-accent)] font-mono">
+                                    {CURRENCY_SYMBOL}{successOrderDetails.charge.toFixed(2)}
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* Footer Buttons */}
+                        <div className="grid grid-cols-2 gap-3 pt-3 border-t border-[var(--app-border)]/60">
+                            <button 
+                                id="btn-place-other"
+                                onClick={() => setSuccessOrderDetails(null)}
+                                className="w-full py-3.5 px-4 rounded-xl bg-[var(--app-input-bg)] border border-[var(--app-border)] hover:border-neutral-700 font-bold text-xs text-[var(--app-text)] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                            >
+                                <ShoppingBag size={14} />
+                                Place other order
+                            </button>
+                            <button 
+                                id="btn-check-status"
+                                onClick={() => {
+                                    setSuccessOrderDetails(null);
+                                    navigate('/dashboard/orders');
+                                }}
+                                className="w-full py-3.5 px-4 rounded-xl bg-[var(--app-accent)] hover:opacity-90 font-bold text-xs text-white transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-lg shadow-[var(--app-accent)]/15"
+                            >
+                                <Clock size={14} />
+                                Check status
+                            </button>
+                        </div>
+
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
@@ -685,7 +809,7 @@ const AddFundsSection = () => {
         if (!user || !amount || parseFloat(amount) < 1) { setNotification({ msg: "Please enter a valid amount (Min 1 INR)", type: 'error' }); return; }
         setLoading(true);
         try {
-            const order = await createRazorpayOrder(parseFloat(amount), user.id);
+            const order = await createRazorpayOrder(parseFloat(amount), user.id, verifiedCoupon?.code || undefined);
             const options: any = { 
                 key: RAZORPAY_KEY_ID, 
                 amount: order.amount, 
@@ -787,7 +911,7 @@ const ProfileSection = () => {
     const [newPass, setNewPass] = useState('');
     const [notification, setNotification] = useState<{msg: string, type: 'success'|'error'} | null>(null);
     const handlePassUpdate = async () => { try { await updateUserPassword(oldPass, newPass); setNotification({ msg: "Password updated!", type: 'success' }); setOldPass(''); setNewPass(''); } catch (e: any) { setNotification({ msg: e.message, type: 'error' }); } };
-    return (<div className="max-w-2xl mx-auto animate-in slide-in-from-bottom-4 duration-500 px-1 md:px-0">{notification && <Notification message={notification.msg} type={notification.type} onClose={() => setNotification(null)} />}<div className="flex flex-col md:flex-row items-center gap-6 mb-8 text-center md:text-left"><div className="w-20 h-20 bg-[var(--app-card-bg)] border border-[var(--app-border)] rounded-full flex items-center justify-center text-4xl font-bold text-[var(--app-accent)] shadow-[0_0_20px_rgba(46,189,89,0.2)]">{user?.name.charAt(0).toUpperCase()}</div><div><h2 className="text-2xl font-bold text-[var(--app-text)]">{user?.name}</h2><p className="text-[var(--app-text-muted)] text-sm">{user?.email}</p><div className="flex gap-2 mt-2 justify-center md:justify-start"><Badge variant="info">{user?.role}</Badge><Badge variant={user?.isBanned ? 'danger' : 'success'}>{user?.isBanned ? 'Banned' : 'Active'}</Badge></div></div></div><div className="grid grid-cols-1 md:grid-cols-2 gap-6"><Card className="p-4 md:p-6 bg-[var(--app-card-bg)] border border-[var(--app-border)]"><h3 className="text-lg font-bold text-[var(--app-text)] mb-4 flex items-center gap-2"><Lock size={18} className="text-[var(--app-accent)]"/> Security</h3><div className="space-y-4"><Input label="Current Password" type="password" value={oldPass} onChange={e => setOldPass(e.target.value)} /><Input label="New Password" type="password" value={newPass} onChange={e => setNewPass(e.target.value)} /><Button onClick={handlePassUpdate} className="w-full bg-[var(--app-accent)] hover:opacity-90 text-white">Update Password</Button></div></Card><Card className="p-4 md:p-6 bg-[var(--app-card-bg)] border border-[var(--app-border)]"><h3 className="text-lg font-bold text-[var(--app-text)] mb-4 flex items-center gap-2"><Wallet size={18} className="text-[var(--app-accent)]"/> Account Stats</h3><div className="space-y-4"><div className="flex justify-between p-3 bg-[var(--app-bg)] rounded border border-[var(--app-border)]"><span className="text-[var(--app-text-muted)] text-sm">Total Spent</span><span className="font-bold text-[var(--app-text)]">{CURRENCY_SYMBOL}{(user?.totalSpent || 0).toFixed(2)}</span></div><div className="flex justify-between p-3 bg-[var(--app-bg)] rounded border border-[var(--app-border)]"><span className="text-[var(--app-text-muted)] text-sm">Joined</span><span className="font-bold text-[var(--app-text)]">{new Date(user?.createdAt || '').toLocaleDateString()}</span></div></div></Card></div></div>);
+    return (<div className="max-w-2xl mx-auto animate-in slide-in-from-bottom-4 duration-500 px-1 md:px-0">{notification && <Notification message={notification.msg} type={notification.type} onClose={() => setNotification(null)} />}<div className="flex flex-col md:flex-row items-center gap-6 mb-8 text-center md:text-left"><div className="w-20 h-20 bg-[var(--app-card-bg)] border border-[var(--app-border)] rounded-full flex items-center justify-center text-4xl font-bold text-[var(--app-accent)] shadow-[0_0_20px_rgba(46,189,89,0.2)]">{(user?.name || '?').charAt(0).toUpperCase()}</div><div><h2 className="text-2xl font-bold text-[var(--app-text)]">{user?.name}</h2><p className="text-[var(--app-text-muted)] text-sm">{user?.email}</p><div className="flex gap-2 mt-2 justify-center md:justify-start"><Badge variant="info">{user?.role}</Badge><Badge variant={user?.isBanned ? 'danger' : 'success'}>{user?.isBanned ? 'Banned' : 'Active'}</Badge></div></div></div><div className="grid grid-cols-1 md:grid-cols-2 gap-6"><Card className="p-4 md:p-6 bg-[var(--app-card-bg)] border border-[var(--app-border)]"><h3 className="text-lg font-bold text-[var(--app-text)] mb-4 flex items-center gap-2"><Lock size={18} className="text-[var(--app-accent)]"/> Security</h3><div className="space-y-4"><Input label="Current Password" type="password" value={oldPass} onChange={e => setOldPass(e.target.value)} /><Input label="New Password" type="password" value={newPass} onChange={e => setNewPass(e.target.value)} /><Button onClick={handlePassUpdate} className="w-full bg-[var(--app-accent)] hover:opacity-90 text-white">Update Password</Button></div></Card><Card className="p-4 md:p-6 bg-[var(--app-card-bg)] border border-[var(--app-border)]"><h3 className="text-lg font-bold text-[var(--app-text)] mb-4 flex items-center gap-2"><Wallet size={18} className="text-[var(--app-accent)]"/> Account Stats</h3><div className="space-y-4"><div className="flex justify-between p-3 bg-[var(--app-bg)] rounded border border-[var(--app-border)]"><span className="text-[var(--app-text-muted)] text-sm">Total Spent</span><span className="font-bold text-[var(--app-text)]">{CURRENCY_SYMBOL}{(user?.totalSpent || 0).toFixed(2)}</span></div><div className="flex justify-between p-3 bg-[var(--app-bg)] rounded border border-[var(--app-border)]"><span className="text-[var(--app-text-muted)] text-sm">Joined</span><span className="font-bold text-[var(--app-text)]">{new Date(user?.createdAt || '').toLocaleDateString()}</span></div></div></Card></div></div>);
 };
 
 const SupportSection = () => {

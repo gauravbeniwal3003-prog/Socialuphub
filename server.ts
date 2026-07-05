@@ -236,7 +236,12 @@ async function startServer() {
     credentials: true
   }));
   
-  app.use(express.json({ limit: '10kb' })); // Limit body size to prevent DoS
+  app.use(express.json({ 
+    limit: '10kb',
+    verify: (req: any, res, buf) => {
+      req.rawBody = buf.toString();
+    }
+  })); // Limit body size to prevent DoS
   app.use(express.urlencoded({ extended: true, limit: '10kb' })); // Parse URL-encoded bodies (essential for other panels integrating with us)
 
   // --- BOT DETECTION MIDDLEWARE ---
@@ -976,82 +981,366 @@ async function startServer() {
     }
   });
 
-   // Razorpay Verification
-  const razorpayVerifySchema = z.object({
-    razorpay_order_id: z.string().min(1),
-    razorpay_payment_id: z.string().min(1),
-    razorpay_signature: z.string().min(1),
-    amount: z.number().optional(),
-    couponCode: z.string().optional()
-  });
+   // --- RAZORPAY PRODUCTION-GRADE MULTI-STAGE VERIFICATION ENGINE ---
 
-  app.post("/api/payments/verify", verifyAuth, async (req: any, res: any) => {
-    const validation = razorpayVerifySchema.safeParse(req.body);
-    if (!validation.success) return res.status(400).json({ error: "Invalid payment data" });
+   // Thread-safe distributed/in-memory lock map to prevent race conditions & double crediting
+   class PaymentLock {
+     private static locks = new Set<string>();
 
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, couponCode } = validation.data;
-    const secret = process.env.RAZORPAY_SECRET || "4wiJs8mHjvhbes6JRZFd35hT";
+     static async acquire(key: string): Promise<boolean> {
+       if (this.locks.has(key)) {
+         for (let i = 0; i < 15; i++) {
+           await new Promise((resolve) => setTimeout(resolve, 400));
+           if (!this.locks.has(key)) {
+             this.locks.add(key);
+             return true;
+           }
+         }
+         return false;
+       }
+       this.locks.add(key);
+       return true;
+     }
 
-    if (!secret) return res.status(500).json({ error: "Payment configuration error" });
+     static release(key: string) {
+       this.locks.delete(key);
+     }
+   }
 
-    const generated_signature = crypto
-      .createHmac("sha256", secret)
-      .update(razorpay_order_id + "|" + razorpay_payment_id)
-      .digest("hex");
+   // Core, thread-safe payment processor function
+   async function processSuccessfulPayment(
+     userId: string,
+     amount: number,
+     paymentId: string,
+     orderId?: string,
+     couponCode?: string
+   ) {
+     if (!userId || !amount || !paymentId) {
+       throw new Error("Missing critical parameters for payment processing");
+     }
 
-    if (generated_signature === razorpay_signature) {
-      try {
-        const userId = req.user.id;
-        // Verify payment is not already processed
-        const { data: existingTxn } = await supabaseAdmin.from('transactions').select('id').eq('paymentId', razorpay_payment_id).maybeSingle();
-        if (existingTxn) return res.json({ success: true, already_processed: true });
+     const lockAcquired = await PaymentLock.acquire(paymentId);
+     if (!lockAcquired) {
+       throw new Error("This payment is currently being processed by another worker");
+     }
 
-        let amount = 0;
-        if (razorpay) {
-            const rzpOrder = await razorpay.orders.fetch(razorpay_order_id);
-            if (rzpOrder) amount = Number(rzpOrder.amount) / 100;
-        } else {
-            // fallback (insecure if someone spoofs amount, but razorpay might not be setup properly)
-            amount = Number(req.body.amount || 0);
-        }
+     try {
+       // Check if payment is already processed successfully in database
+       const { data: existingTxn } = await supabaseAdmin
+         .from("transactions")
+         .select("id, status")
+         .eq("paymentId", paymentId)
+         .maybeSingle();
 
-        let bonusAmount = 0;
+       if (existingTxn && existingTxn.status === "SUCCESS") {
+         console.log(`[Payment Lock] Payment ${paymentId} has already been successfully credited.`);
+         return { success: true, already_processed: true };
+       }
+       
+       // Check if order is already successfully paid (prevent double crediting for multiple attempts on same order)
+       if (orderId) {
+         const { data: existingOrderTxn } = await supabaseAdmin
+           .from("transactions")
+           .select("id, status, paymentId")
+           .eq("orderId", orderId)
+           .eq("status", "SUCCESS")
+           .maybeSingle();
+           
+         if (existingOrderTxn) {
+           console.log(`[Payment Lock] Order ${orderId} was already credited via payment ${existingOrderTxn.paymentId}. Ignoring new payment ${paymentId}.`);
+           return { success: true, already_processed: true };
+         }
+       }
 
-        if (couponCode) {
-            const cleanCode = couponCode.trim().toUpperCase();
-            const { data: c } = await supabaseAdmin.from('coupons').select('*').eq('code', cleanCode).single();
-            if (c && c.isEnabled && c.category === 'DEPOSIT' && amount >= c.minAmount) {
-                // Safely use coupon
-                const { data: couponApplied } = await supabaseAdmin.rpc('use_coupon', { coupon_code: c.code, user_id: userId });
-                
-                if (couponApplied) {
-                    if (c.type === 'PERCENTAGE') {
-                        bonusAmount = amount * (c.value / 100);
-                    } else {
-                        bonusAmount = c.value;
-                    }
-                    bonusAmount = Math.round((bonusAmount + Number.EPSILON) * 100) / 100;
-                }
-            }
-        }
+       // Find any existing pending transaction for this order
+       let pendingTxn: any = null;
+       if (orderId) {
+         const { data } = await supabaseAdmin
+           .from("transactions")
+           .select("*")
+           .eq("orderId", orderId)
+           .eq("status", "PENDING")
+           .maybeSingle();
+         pendingTxn = data;
+       }
 
-        const totalCredit = amount + bonusAmount;
-        const txnId = `txn_${Date.now()}`;
-        await supabaseAdmin.from('transactions').insert({
-            id: txnId, userId, amount: totalCredit, type: 'DEPOSIT', status: 'SUCCESS', method: 'RAZORPAY', paymentId: razorpay_payment_id, date: new Date().toISOString()
-        });
-        
-        await supabaseAdmin.rpc('increment_balance', { user_id: userId, amount: totalCredit });
-        await supabaseAdmin.from('users').update({ lastPaymentAt: new Date().toISOString() }).eq('id', userId);
-        
-        res.json({ success: true });
-      } catch (err) {
-        res.status(500).json({ error: "DB update failed" });
-      }
-    } else {
-      res.status(400).json({ success: false, error: "Invalid signature" });
-    }
-  });
+       let bonusAmount = 0;
+       let couponAppliedSuccessfully = false;
+
+       if (couponCode) {
+         const cleanCode = couponCode.trim().toUpperCase();
+         const { data: c } = await supabaseAdmin.from("coupons").select("*").eq("code", cleanCode).single();
+         if (c && c.isEnabled && c.category === "DEPOSIT" && amount >= c.minAmount) {
+           // Safely consume the coupon
+           const { data: couponApplied } = await supabaseAdmin.rpc("use_coupon", {
+             coupon_code: c.code,
+             user_id: userId,
+           });
+
+           if (couponApplied) {
+             couponAppliedSuccessfully = true;
+             if (c.type === "PERCENTAGE") {
+               bonusAmount = amount * (c.value / 100);
+             } else {
+               bonusAmount = c.value;
+             }
+             bonusAmount = Math.round((bonusAmount + Number.EPSILON) * 100) / 100;
+           }
+         }
+       }
+
+       const totalCredit = amount + bonusAmount;
+
+       if (pendingTxn) {
+         // Elevate existing pending transaction to SUCCESS
+         const { error: updateErr } = await supabaseAdmin
+           .from("transactions")
+           .update({
+             status: "SUCCESS",
+             paymentId: paymentId,
+             amount: totalCredit,
+             utr: couponAppliedSuccessfully ? `COUPON:${couponCode}` : pendingTxn.utr,
+             date: new Date().toISOString(),
+           })
+           .eq("id", pendingTxn.id);
+
+         if (updateErr) throw new Error(`Pending transaction elevation failed: ${updateErr.message}`);
+       } else {
+         // Create a brand new success transaction record
+         const txnId = `txn_${Date.now()}`;
+         const { error: insertErr } = await supabaseAdmin.from("transactions").insert({
+           id: txnId,
+           userId: userId,
+           amount: totalCredit,
+           type: "DEPOSIT",
+           status: "SUCCESS",
+           method: "RAZORPAY",
+           paymentId: paymentId,
+           orderId: orderId || null,
+           utr: couponAppliedSuccessfully ? `COUPON:${couponCode}` : null,
+           date: new Date().toISOString(),
+         });
+
+         if (insertErr) throw new Error(`Transaction insertion failed: ${insertErr.message}`);
+       }
+
+       // Atomic wallet balance addition
+       const { error: balErr } = await supabaseAdmin.rpc("increment_balance", {
+         user_id: userId,
+         amount: totalCredit,
+       });
+       if (balErr) throw new Error("Atomic wallet balance increment failed");
+
+       // Update last payment timestamp
+       await supabaseAdmin.from("users").update({ lastPaymentAt: new Date().toISOString() }).eq("id", userId);
+
+       console.log(`[Payment Engine] User ${userId} successfully credited ${totalCredit} INR (Amount: ${amount}, Bonus: ${bonusAmount}) for payment ${paymentId}`);
+       return { success: true, credited: totalCredit };
+     } finally {
+       PaymentLock.release(paymentId);
+     }
+   }
+
+   // Razorpay Order Creation Endpoint
+   const razorpayCreateOrderSchema = z.object({
+     amount: z.number().min(1),
+     couponCode: z.string().optional()
+   });
+
+   app.post("/api/payments/create-order", verifyAuth, async (req: any, res: any) => {
+     const validation = razorpayCreateOrderSchema.safeParse(req.body);
+     if (!validation.success) return res.status(400).json({ error: "Invalid request parameters" });
+
+     const { amount, couponCode } = validation.data;
+     const userId = req.user.id;
+     const receipt = `rcpt_${Date.now()}_${userId.substring(0, 4)}`;
+
+     try {
+       let orderId = null;
+       let rzpOrder: any = null;
+
+       if (razorpay) {
+         rzpOrder = await razorpay.orders.create({
+           amount: Math.round(amount * 100), // paise
+           currency: "INR",
+           receipt: receipt,
+           notes: {
+             userId: userId,
+             couponCode: couponCode || ""
+           }
+         });
+         orderId = rzpOrder.id;
+       }
+
+       // Pre-create transaction as PENDING so that we have an audit log and correlation for webhooks
+       const txnId = `txn_${Date.now()}`;
+       await supabaseAdmin.from("transactions").insert({
+         id: txnId,
+         userId: userId,
+         amount: amount,
+         type: "DEPOSIT",
+         status: "PENDING",
+         method: "RAZORPAY",
+         orderId: orderId,
+         utr: couponCode ? `COUPON:${couponCode}` : null,
+         date: new Date().toISOString()
+       });
+
+       if (rzpOrder) {
+         return res.json(rzpOrder);
+       } else {
+         return res.json({
+           id: null,
+           amount: Math.round(amount * 100),
+           currency: "INR",
+           receipt: receipt,
+           fallback: true
+         });
+       }
+     } catch (err: any) {
+       console.error("[Payment Engine] Failed to create Razorpay order:", err);
+       return res.status(500).json({ error: err.message || "Failed to create order" });
+     }
+   });
+
+   // Manual Razorpay Verification
+   const razorpayVerifySchema = z.object({
+     razorpay_order_id: z.string().min(1),
+     razorpay_payment_id: z.string().min(1),
+     razorpay_signature: z.string().min(1),
+     amount: z.number().optional(),
+     couponCode: z.string().optional()
+   });
+
+   app.post("/api/payments/verify", verifyAuth, async (req: any, res: any) => {
+     const validation = razorpayVerifySchema.safeParse(req.body);
+     if (!validation.success) return res.status(400).json({ error: "Invalid payment data" });
+
+     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, couponCode } = validation.data;
+     const secret = process.env.RAZORPAY_SECRET || "4wiJs8mHjvhbes6JRZFd35hT";
+
+     if (!secret) return res.status(500).json({ error: "Payment configuration error" });
+
+     const generated_signature = crypto
+       .createHmac("sha256", secret)
+       .update(razorpay_order_id + "|" + razorpay_payment_id)
+       .digest("hex");
+
+     if (generated_signature === razorpay_signature) {
+       try {
+         const userId = req.user.id;
+         let amount = 0;
+         if (razorpay) {
+           const rzpOrder = await razorpay.orders.fetch(razorpay_order_id);
+           if (rzpOrder) amount = Number(rzpOrder.amount) / 100;
+         } else {
+           amount = Number(req.body.amount || 0);
+         }
+
+         const result = await processSuccessfulPayment(userId, amount, razorpay_payment_id, razorpay_order_id, couponCode);
+         return res.json(result);
+       } catch (err: any) {
+         console.error("[Payment Engine] Manual verification process failed:", err);
+         return res.status(500).json({ error: err.message || "DB update failed" });
+       }
+     } else {
+       return res.status(400).json({ success: false, error: "Invalid signature" });
+     }
+   });
+
+   // Webhook Razorpay Verification (Production grade auto-credits receiver)
+   app.post("/api/payments/webhook", async (req: any, res: any) => {
+     const signature = req.headers["x-razorpay-signature"];
+     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+
+     console.log("[Razorpay Webhook] Received webhook call.");
+
+     if (webhookSecret) {
+       if (!signature) {
+         console.error("[Razorpay Webhook] Missing signature header.");
+         return res.status(400).json({ error: "Missing signature header" });
+       }
+
+       // Compute and validate signature using standard hmac validation on rawBody
+       const isVerified = Razorpay.validateWebhookSignature(
+         req.rawBody || JSON.stringify(req.body),
+         signature as string,
+         webhookSecret
+       );
+
+       if (!isVerified) {
+         console.error("[Razorpay Webhook] Signature verification failed.");
+         return res.status(400).json({ error: "Invalid webhook signature" });
+       }
+     } else {
+       console.warn("[Razorpay Webhook] RAZORPAY_WEBHOOK_SECRET is not configured. Webhook processing without signature check.");
+     }
+
+     try {
+       const eventObj = req.body;
+       const eventName = eventObj?.event;
+       console.log(`[Razorpay Webhook] Processing event: ${eventName}`);
+
+       if (eventName === "payment.captured" || eventName === "order.paid") {
+         let paymentEntity = eventObj.payload?.payment?.entity;
+         let orderEntity = eventObj.payload?.order?.entity;
+
+         if (!paymentEntity && eventObj.payload?.payment) {
+           paymentEntity = eventObj.payload.payment;
+         }
+         if (!orderEntity && eventObj.payload?.order) {
+           orderEntity = eventObj.payload.order;
+         }
+
+         const paymentId = paymentEntity?.id;
+         const rzpOrderId = paymentEntity?.order_id || orderEntity?.id;
+
+         if (!paymentId) {
+           console.warn("[Razorpay Webhook] Missing payment ID in payload.");
+           return res.json({ status: "ignored", reason: "missing payment id" });
+         }
+
+         // Look up existing transaction by orderId to correlate back to user
+         let txn: any = null;
+         if (rzpOrderId) {
+           const { data } = await supabaseAdmin
+             .from("transactions")
+             .select("*")
+             .eq("orderId", rzpOrderId)
+             .maybeSingle();
+           txn = data;
+         }
+
+         let userId = paymentEntity?.notes?.userId || paymentEntity?.notes?.user_id || orderEntity?.notes?.userId || orderEntity?.notes?.user_id;
+         if (!userId && txn) {
+           userId = txn.userId;
+         }
+
+         if (!userId) {
+           console.error(`[Razorpay Webhook] Could not associate payment ${paymentId} with any user.`);
+           return res.status(400).json({ error: "User association failed" });
+         }
+
+         const rawAmount = paymentEntity?.amount || orderEntity?.amount || (txn ? txn.amount * 100 : 0);
+         const amount = rawAmount / 100;
+
+         let couponCode = paymentEntity?.notes?.couponCode || paymentEntity?.notes?.coupon_code || orderEntity?.notes?.couponCode;
+         if (!couponCode && txn && txn.utr && txn.utr.startsWith("COUPON:")) {
+           couponCode = txn.utr.replace("COUPON:", "");
+         }
+
+         const result = await processSuccessfulPayment(userId, amount, paymentId, rzpOrderId, couponCode || undefined);
+         return res.json({ status: "processed", ...result });
+       }
+
+       return res.json({ status: "ignored", event: eventName });
+     } catch (err: any) {
+       console.error("[Razorpay Webhook] Processing error:", err);
+       return res.status(500).json({ error: err.message || "Webhook handling failed" });
+     }
+   });
+
+
 
   const verifyCouponSchema = z.object({
     code: z.string(),

@@ -1804,11 +1804,11 @@ const UserManagement: React.FC<{
                 <td className={TABLE_CELL_CLASS}>
                   <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-full bg-[var(--app-bg)] flex items-center justify-center font-bold text-[var(--app-accent)] border border-[var(--app-accent)]/20 shadow-sm shrink-0">
-                      {u.name.charAt(0).toUpperCase()}
+                      {(u.name || '?').charAt(0).toUpperCase()}
                     </div>
                     <div>
                       <div className="font-bold text-[var(--app-text)] text-sm">
-                        {u.name}
+                        {u.name || 'Anonymous'}
                       </div>
                       <div className="text-[var(--app-text-muted)] text-[10px] font-mono">
                         {(u.id || "").substring(0, 8)}...

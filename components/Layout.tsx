@@ -192,7 +192,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
              <div className="p-4 border-t border-[var(--app-border)]">
                 <div className="flex items-center gap-3 p-3 bg-[var(--app-card-bg)] rounded-lg border border-[var(--app-border)]">
                    <div className="w-10 h-10 rounded-full bg-[var(--app-accent)] flex items-center justify-center text-white font-bold text-lg">
-                      {user?.name.charAt(0).toUpperCase()}
+                      {(user?.name || '?').charAt(0).toUpperCase()}
                    </div>
                    <div className="overflow-hidden">
                       <p className="text-[var(--app-text)] font-bold truncate">{user?.name}</p>

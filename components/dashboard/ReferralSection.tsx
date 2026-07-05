@@ -176,9 +176,9 @@ export const ReferralSection: React.FC = () => {
                                 <tr key={u.id} className="hover:bg-[var(--app-accent)]/5 transition-colors">
                                     <td className="px-6 py-4 text-[var(--app-text)] font-bold flex items-center gap-3">
                                         <div className="w-8 h-8 rounded-full bg-[var(--app-bg)] flex items-center justify-center text-xs text-[var(--app-text-muted)] border border-[var(--app-border)] font-mono">
-                                            {u.name.charAt(0).toUpperCase()}
+                                            {(u.name || '?').charAt(0).toUpperCase()}
                                         </div>
-                                        {u.name}
+                                        {u.name || 'Anonymous'}
                                     </td>
                                     <td className="px-6 py-4 text-[var(--app-text-muted)] font-mono text-right">{new Date(u.created_at).toLocaleDateString()}</td>
                                 </tr>

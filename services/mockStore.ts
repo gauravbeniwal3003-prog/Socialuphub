@@ -250,7 +250,7 @@ export const useStore = <T>(key: string, getter: () => T) => {
             if(active) setData(items as any);
         }
         else if (key === 'suh_coupons') {
-            const items = await fetchFresh<Coupon>('coupons', cacheKey, 'created_at', 100);
+            const items = await fetchFresh<Coupon>('coupons', cacheKey, 'code', 100);
             if(active) setData(items as any);
         }
         else if (key === 'suh_orders') {
@@ -438,8 +438,37 @@ const callSmmApi = async (params: URLSearchParams, retries = 2): Promise<any> =>
 
 // --- RAZORPAY ORDERS API ---
 
-export const createRazorpayOrder = async (amount: number, userId: string) => {
+export const createRazorpayOrder = async (amount: number, userId: string, couponCode?: string) => {
     const receipt = `rcpt_${Date.now()}_${userId.substring(0,4)}`;
+    
+    // 1. Try Express backend first (includes pre-creation of PENDING transaction & custom notes tracking)
+    try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+            const response = await fetch("/api/payments/create-order", {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${session.access_token}`
+                },
+                body: JSON.stringify({ 
+                    amount: amount,
+                    couponCode: couponCode
+                })
+            });
+            if (response.ok) {
+                const data = await response.json();
+                if (data && (data.id || data.fallback)) {
+                    console.log("[Payment] Created Razorpay order via secure Express server.");
+                    return data;
+                }
+            }
+        }
+    } catch (err: any) {
+        console.warn("Express order creation failed, falling back to Edge Function:", err.message);
+    }
+
+    // 2. Fallback to older Edge Function
     const baseUrl = SUPABASE_URL.replace(/\/$/, "");
     const functionUrl = `${baseUrl}/functions/v1/razorpay`;
     
@@ -618,6 +647,7 @@ export const placeOrder = async (userId: string, serviceId: string, serviceName:
           throw new Error(errData.error || "Order placement failed");
       }
       
+      const resData = await response.json();
       invalidateCache(['suh_cache_orders', 'suh_cache_users']);
       
       // Auto processing logic to queue the SMM api call
@@ -626,6 +656,7 @@ export const placeOrder = async (userId: string, serviceId: string, serviceName:
               processOrderQueue().catch(console.error);
           }, 100);
       }
+      return resData;
   } catch (e: any) {
       console.error(`Order Failed: ${serviceId}`, e.message);
       throw e;
@@ -775,9 +806,21 @@ export const syncOrderStatuses = async () => {
     } catch (e) { console.error("Auto-sync error", e); }
 };
 
-export const createCoupon = async (c: Coupon) => { await supabase.from('coupons').insert(c); invalidateCache(['suh_cache_coupons']); };
-export const deleteCoupon = async (code: string) => { await supabase.from('coupons').delete().eq('code', code); invalidateCache(['suh_cache_coupons']); };
-export const toggleCouponStatus = async (code: string, s: boolean) => { await supabase.from('coupons').update({ isEnabled: !s }).eq('code', code); invalidateCache(['suh_cache_coupons']); };
+export const createCoupon = async (c: Coupon) => { 
+    const { error } = await supabase.from('coupons').insert(c); 
+    if (error) throw new Error(error.message);
+    invalidateCache(['suh_cache_coupons']); 
+};
+export const deleteCoupon = async (code: string) => { 
+    const { error } = await supabase.from('coupons').delete().eq('code', code); 
+    if (error) throw new Error(error.message);
+    invalidateCache(['suh_cache_coupons']); 
+};
+export const toggleCouponStatus = async (code: string, s: boolean) => { 
+    const { error } = await supabase.from('coupons').update({ isEnabled: !s }).eq('code', code); 
+    if (error) throw new Error(error.message);
+    invalidateCache(['suh_cache_coupons']); 
+};
 
 // Global lock for service sync
 let isServiceSyncing = false;
