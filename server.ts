@@ -293,7 +293,17 @@ async function startServer() {
           rejectUnauthorized: false
         })
       });
-      return response.data;
+      
+      let data = response.data;
+      if (typeof data === 'string') {
+        try {
+           data = JSON.parse(data);
+        } catch(err) {
+           console.error("[SMM Proxy] Received non-JSON response:", data.substring(0, 100));
+           return { error: "Provider returned invalid response (possibly offline or blocking requests)" };
+        }
+      }
+      return data;
     } catch (e: any) {
       console.error("[BG Task] SMM Call Failed:", e.message);
       return { error: e.message };

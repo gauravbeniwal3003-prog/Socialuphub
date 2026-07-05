@@ -213,7 +213,7 @@ const NewOrderSection = () => {
         setCoupon('');
         try {
             const { data: { session } } = await supabase.auth.getSession();
-            const response = await fetch('/api/coupons/verify', {
+            const response = await fetch(`${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/coupons/verify`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -226,7 +226,13 @@ const NewOrderSection = () => {
                     userId: user.id
                 })
             });
-            const res = await response.json();
+            let res: any;
+            const contentType = response.headers.get("content-type");
+            if (contentType && contentType.includes("application/json")) {
+                res = await response.json();
+            } else {
+                throw new Error("Secure backend server is starting up or offline. Please wait 15-30 seconds and try again.");
+            }
             if (!response.ok) {
                 throw new Error(res.error || "This coupon doesn't exist or expired");
             }
@@ -780,7 +786,7 @@ const AddFundsSection = () => {
         setVerifiedCoupon(null);
         try {
             const { data: { session } } = await supabase.auth.getSession();
-            const response = await fetch('/api/coupons/verify', {
+            const response = await fetch(`${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/coupons/verify`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -793,7 +799,13 @@ const AddFundsSection = () => {
                     userId: user.id
                 })
             });
-            const res = await response.json();
+            let res: any;
+            const contentType = response.headers.get("content-type");
+            if (contentType && contentType.includes("application/json")) {
+                res = await response.json();
+            } else {
+                throw new Error("Secure backend server is starting up or offline. Please wait 15-30 seconds and try again.");
+            }
             if (!response.ok) {
                 throw new Error(res.error || "This coupon doesn't exist or expired");
             }

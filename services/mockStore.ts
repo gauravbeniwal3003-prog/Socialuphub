@@ -56,6 +56,35 @@ const handleSupabaseError = (error: any) => {
     throw new Error(error.message || "Database Error");
 };
 
+// Robust helper to parse and validate JSON responses from the backend proxy/services
+async function handleJsonResponse(response: Response, defaultErrorMsg: string): Promise<any> {
+    const contentType = response.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+        try {
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || defaultErrorMsg);
+            }
+            return data;
+        } catch (err: any) {
+            if (!response.ok) {
+                throw new Error(err.message || defaultErrorMsg);
+            }
+            throw new Error("Invalid server response format");
+        }
+    } else {
+        // Non-JSON response, typically HTML from gateway, proxy, or server spinning up
+        const text = await response.text().catch(() => "");
+        if (!response.ok) {
+            if (response.status === 502 || response.status === 503 || response.status === 504 || text.includes("Render") || text.includes("Spinning up")) {
+                throw new Error("Secure backend server is starting up or waking up from sleep. Please wait 15-30 seconds and try again.");
+            }
+            throw new Error(`${defaultErrorMsg} (Server returned HTTP ${response.status}: ${response.statusText || 'Error'})`);
+        }
+        throw new Error("Expected JSON response but received HTML or text from server.");
+    }
+}
+
 // Helper for IST time (India Standard Time)
 const getISTTime = (): string => {
     const nowMs = Date.now();
@@ -303,15 +332,14 @@ export const transferReferralBalance = async (userId: string) => {
         if (!session) throw new Error("Not authenticated");
 
          
-        const urlObj = "/api/users/transfer-referral";
+        const urlObj = `${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/users/transfer-referral`;
         
         const response = await fetch(urlObj, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${session.access_token}` }
         });
         
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Transfer failed");
+        const data = await handleJsonResponse(response, "Transfer failed");
 
         invalidateCache(['suh_cache_users', 'suh_cache_transactions']);
         if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('force_balance_update', { detail: { balance: data.newBalance } }));
@@ -387,7 +415,7 @@ const callSmmApi = async (params: URLSearchParams, retries = 2): Promise<any> =>
             body[key] = value;
         });
 
-        const urlObj = "/api/smm";
+        const urlObj = `${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/smm`;
 
         const response = await fetch(urlObj, {
             method: "POST",
@@ -445,7 +473,7 @@ export const createRazorpayOrder = async (amount: number, userId: string, coupon
     try {
         const { data: { session } } = await supabase.auth.getSession();
         if (session) {
-            const response = await fetch("/api/payments/create-order", {
+            const response = await fetch(`${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/payments/create-order`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -456,12 +484,10 @@ export const createRazorpayOrder = async (amount: number, userId: string, coupon
                     couponCode: couponCode
                 })
             });
-            if (response.ok) {
-                const data = await response.json();
-                if (data && (data.id || data.fallback)) {
-                    console.log("[Payment] Created Razorpay order via secure Express server.");
-                    return data;
-                }
+            const data = await handleJsonResponse(response, "Razorpay order creation failed");
+            if (data && (data.id || data.fallback)) {
+                console.log("[Payment] Created Razorpay order via secure Express server.");
+                return data;
             }
         }
     } catch (err: any) {
@@ -634,7 +660,7 @@ export const placeOrder = async (userId: string, serviceId: string, serviceName:
       const user = await checkUserSecurity(userId);
 
       const { data: { session } } = await supabase.auth.getSession();
-      const urlObj = "/api/orders/place";
+      const urlObj = `${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/orders/place`;
       
       const response = await fetch(urlObj, {
           method: 'POST',
@@ -642,12 +668,7 @@ export const placeOrder = async (userId: string, serviceId: string, serviceName:
           body: JSON.stringify({ userId, serviceId, serviceName, link, quantity, originalCost, couponCode })
       });
       
-      if (!response.ok) {
-          const errData = await response.json();
-          throw new Error(errData.error || "Order placement failed");
-      }
-      
-      const resData = await response.json();
+      const resData = await handleJsonResponse(response, "Order placement failed");
       invalidateCache(['suh_cache_orders', 'suh_cache_users']);
       
       // Auto processing logic to queue the SMM api call
@@ -670,7 +691,7 @@ export const handleRazorpaySuccess = async (userId: string, amount: number, paym
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) throw new Error("Authentication required for payment verification");
 
-            const urlObj = "/api/payments/verify";
+            const urlObj = `${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/payments/verify`;
 
             const response = await fetch(urlObj, {
                 method: 'POST',
@@ -687,10 +708,7 @@ export const handleRazorpaySuccess = async (userId: string, amount: number, paym
                 })
             });
 
-            if (!response.ok) {
-                const errData = await response.json();
-                throw new Error(errData.error || "Payment verification failed");
-            }
+            await handleJsonResponse(response, "Payment verification failed");
         } else {
            throw new Error("Missing payment verification data from Razorpay.");
         }
@@ -1081,14 +1099,13 @@ export const startAutoSync = () => {
 export const checkUsernameUnique = async (n: string) => { 
     try {
          
-        const urlObj = "/api/auth/lookup";
+        const urlObj = `${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/auth/lookup`;
         const response = await fetch(urlObj, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'checkUsernameUnique', value: n })
         });
-        if (!response.ok) return true;
-        const resData = await response.json();
+        const resData = await handleJsonResponse(response, "Username lookup failed");
         return resData.unique ?? true;
     } catch (e) {
         return true; // Assume unique on error to let DB handle it
@@ -1098,14 +1115,13 @@ export const checkMobileUnique = async (m: string) => {
     if (!m) return true;
     try {
          
-        const urlObj = "/api/auth/lookup";
+        const urlObj = `${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/auth/lookup`;
         const response = await fetch(urlObj, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'checkMobileUnique', value: m })
         });
-        if (!response.ok) return true;
-        const resData = await response.json();
+        const resData = await handleJsonResponse(response, "Mobile lookup failed");
         return resData.unique ?? true;
     } catch (e) {
         return true;
@@ -1114,14 +1130,13 @@ export const checkMobileUnique = async (m: string) => {
 export const getEmailByMobile = async (m: string) => { 
     try {
          
-        const urlObj = "/api/auth/lookup";
+        const urlObj = `${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/auth/lookup`;
         const response = await fetch(urlObj, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'getEmailByMobile', value: m })
         });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const resData = await response.json();
+        const resData = await handleJsonResponse(response, "Get email lookup failed");
         return resData.email;
     } catch (e) {
         console.warn("getEmailByMobile server lookup failed, attempting direct Supabase query fallback:", e);
