@@ -389,22 +389,49 @@ export const updateConfig = async (newConfig: Partial<GlobalConfig>) => {
 
 // Helper to dynamically get Render Backend URL from local cache
 const getRenderBackendUrl = (): string => {
+    const defaultBackend = 'https://socialuphub-backend.onrender.com';
+    
+    // Check local storage cache for a user-configured backend URL
     try {
         const cached = getFromCacheSync<GlobalConfig>('suh_cache_config');
-        if (cached && cached.renderBackendUrl && cached.renderBackendUrl.trim() !== '') {
-            return cached.renderBackendUrl.trim();
+        if (cached && typeof cached.renderBackendUrl === 'string') {
+            const trimmed = cached.renderBackendUrl.trim();
+            if (trimmed !== '' && trimmed !== '/' && trimmed.startsWith('http')) {
+                // If it is a valid remote URL and not the same as current static origin
+                if (typeof window !== 'undefined' && trimmed !== window.location.origin) {
+                    return trimmed;
+                }
+                if (typeof window === 'undefined') {
+                    return trimmed;
+                }
+            }
         }
     } catch (e) {
         console.warn("Could not retrieve cached backend URL:", e);
     }
+
+    // Dynamic environment fallback
     if (typeof window !== 'undefined') {
-        const origin = window.location.origin.toLowerCase();
-        if (origin.includes('socialuphub.in') || origin.includes('socialuphub-smm.web.app')) {
-            return 'https://socialuphub-backend.onrender.com';
+        const hostname = window.location.hostname.toLowerCase();
+        
+        // Check if we are running in local dev server or AI Studio preview
+        const isLocalOrPreview = 
+            hostname === 'localhost' ||
+            hostname === '127.0.0.1' ||
+            hostname === '0.0.0.0' ||
+            hostname.includes('asia-east1.run.app') || // AI Studio previews
+            hostname.includes('.local') ||
+            hostname.includes('gitpod.io') ||
+            hostname.includes('github.dev');
+
+        if (isLocalOrPreview) {
+            // In local development or AI Studio preview, the API server runs on the same origin (port 3000)
+            return window.location.origin;
         }
-        return window.location.origin;
     }
-    return 'https://socialuphub-backend.onrender.com';
+
+    // When running in production static hosting (e.g., Firebase Hosting), we must route to the remote Render backend
+    return defaultBackend;
 };
 
 // Helper to get the base API URL dynamically (supporting Admin Panel configuration)

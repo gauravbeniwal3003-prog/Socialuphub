@@ -3,6 +3,11 @@ import time
 import logging
 import threading
 import requests
+import base64
+import json
+import hmac
+import hashlib
+from functools import wraps
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -13,6 +18,11 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 SMM_API_KEY = os.environ.get("SMM_API_KEY", "")
 SMM_API_URL = os.environ.get("SMM_API_URL", "https://safesmmpanel.com/api/v2")
 
+# Razorpay Keys
+RAZORPAY_KEY = os.environ.get("RAZORPAY_KEY", "rzp_test_rYf3Lq7C8W2oJn")
+RAZORPAY_SECRET = os.environ.get("RAZORPAY_SECRET", "4wiJs8mHjvhbes6JRZFd35hT")
+RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+
 # Configure Logging
 logging.basicConfig(
     level=logging.INFO,
@@ -21,7 +31,8 @@ logging.basicConfig(
 logger = logging.getLogger("SocialUpHub-Render-Backend")
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": ["https://socialuphub.com", "https://socialuphub.in", "https://socialuphub-smm.web.app"]}})  # Secure CORS configuration
+# Enable open CORS for API endpoints to prevent preflight blocks on user-deployed custom domains or subdomains
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # --- SUPABASE REST HELPER FUNCTIONS ---
 def get_supabase_headers():
@@ -622,6 +633,833 @@ def smm_user_api():
 
     return jsonify({"error": "Declined: Unsupported API action"}), 200
 
+
+# ==============================================================================
+# --- JWT DECODER & AUTHENTICATION MIDDLEWARES ---
+# ==============================================================================
+def decode_jwt_payload(token):
+    try:
+        parts = token.split('.')
+        if len(parts) >= 2:
+            payload_b64 = parts[1]
+            padding = '=' * (4 - len(payload_b64) % 4)
+            payload_b64 += padding
+            decoded_bytes = base64.b64decode(payload_b64)
+            return json.loads(decoded_bytes.decode('utf-8'))
+    except Exception as e:
+        logger.error(f"JWT decode error: {str(e)}")
+    return None
+
+def verify_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get("Authorization")
+        user_id = None
+        email = None
+        
+        req_data = request.get_json(silent=True) or {}
+        user_id = req_data.get("userId") or request.args.get("userId")
+        
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
+            if token and token != 'undefined' and token != 'null':
+                payload = decode_jwt_payload(token)
+                if payload:
+                    user_id = payload.get("sub", user_id)
+                    email = payload.get("email")
+
+        if not user_id:
+            return jsonify({"error": "User identification missing. Please log out and log in again."}), 401
+            
+        user_list = supabase_get("users", {"id": f"eq.{user_id}"})
+        user = user_list[0] if user_list else None
+        
+        if not user and request.path != '/api/sync-user':
+            return jsonify({"error": "User not found. Please log out and log in again."}), 401
+            
+        if user and user.get("isBanned"):
+            return jsonify({"error": "User is banned"}), 403
+            
+        request.user = user or {"id": user_id, "email": email}
+        return f(*args, **kwargs)
+    return decorated
+
+def verify_admin(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        user = getattr(request, 'user', None)
+        if not user:
+            return jsonify({"error": "Unauthorized"}), 401
+            
+        role = user.get("role") if isinstance(user, dict) else None
+        if role != 'ADMIN':
+            return jsonify({"error": "Forbidden: Admin access required."}), 403
+            
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ==============================================================================
+# --- RAZORPAY HELPERS ---
+# ==============================================================================
+def razorpay_create_order(amount, receipt, notes):
+    try:
+        url = "https://api.razorpay.com/v1/orders"
+        auth = (RAZORPAY_KEY, RAZORPAY_SECRET)
+        payload = {
+            "amount": int(amount),
+            "currency": "INR",
+            "receipt": receipt,
+            "notes": notes
+        }
+        res = requests.post(url, auth=auth, json=payload, timeout=15)
+        res.raise_for_status()
+        return res.json()
+    except Exception as e:
+        logger.error(f"Razorpay Order Creation Error: {str(e)}")
+        return None
+
+def razorpay_fetch_order(order_id):
+    try:
+        url = f"https://api.razorpay.com/v1/orders/{order_id}"
+        auth = (RAZORPAY_KEY, RAZORPAY_SECRET)
+        res = requests.get(url, auth=auth, timeout=15)
+        res.raise_for_status()
+        return res.json()
+    except Exception as e:
+        logger.error(f"Razorpay Order Fetch Error: {str(e)}")
+        return None
+
+def verify_razorpay_signature(order_id, payment_id, signature):
+    try:
+        msg = f"{order_id}|{payment_id}"
+        generated = hmac.new(
+            RAZORPAY_SECRET.encode('utf-8'),
+            msg.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        return hmac.compare_digest(generated, signature)
+    except Exception as e:
+        logger.error(f"Razorpay signature verification error: {str(e)}")
+        return False
+
+
+# ==============================================================================
+# --- CORE PAYMENT PROCESSOR ---
+# ==============================================================================
+payment_lock = threading.Lock()
+
+def process_successful_payment(user_id, amount, payment_id, order_id=None, coupon_code=None):
+    if not user_id or not amount or not payment_id:
+        raise ValueError("Missing critical parameters for payment processing")
+        
+    with payment_lock:
+        existing_tx_list = supabase_get("transactions", {"paymentId": f"eq.{payment_id}"})
+        if existing_tx_list:
+            for tx in existing_tx_list:
+                if tx.get("status") == "SUCCESS":
+                    logger.info(f"Payment {payment_id} has already been successfully credited.")
+                    return {"success": True, "already_processed": True}
+                    
+        if order_id:
+            existing_order_tx_list = supabase_get("transactions", {"orderId": f"eq.{order_id}", "status": "eq.SUCCESS"})
+            if existing_order_tx_list:
+                logger.info(f"Order {order_id} was already credited. Ignoring new payment {payment_id}.")
+                return {"success": True, "already_processed": True}
+                
+        pending_txn = None
+        if order_id:
+            pending_list = supabase_get("transactions", {"orderId": f"eq.{order_id}", "status": "eq.PENDING"})
+            if pending_list:
+                pending_txn = pending_list[0]
+                
+        bonus_amount = 0.0
+        coupon_applied_successfully = False
+        
+        if coupon_code:
+            clean_code = str(coupon_code).strip().upper()
+            c_list = supabase_get("coupons", {"code": f"eq.{clean_code}"})
+            if c_list:
+                c = c_list[0]
+                if c.get("isEnabled") and c.get("category") == "DEPOSIT" and float(amount) >= float(c.get("minAmount") or 0.0):
+                    coupon_applied = supabase_rpc("use_coupon", {"coupon_code": c.get("code"), "user_id": user_id})
+                    if coupon_applied:
+                        coupon_applied_successfully = True
+                        c_val = float(c.get("value") or 0.0)
+                        if c.get("type") == "PERCENTAGE":
+                            bonus_amount = float(amount) * (c_val / 100.0)
+                        else:
+                            bonus_amount = c_val
+                        bonus_amount = round(bonus_amount, 2)
+                        
+        total_credit = float(amount) + bonus_amount
+        total_credit = round(total_credit, 2)
+        
+        if pending_txn:
+            supabase_patch(
+                "transactions",
+                {"id": f"eq.{pending_txn.get('id')}"},
+                {
+                    "status": "SUCCESS",
+                    "paymentId": payment_id,
+                    "amount": total_credit,
+                    "utr": f"COUPON:{coupon_code}" if coupon_applied_successfully else pending_txn.get("utr"),
+                    "date": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                }
+            )
+        else:
+            txn_id = f"txn_{int(time.time() * 1000)}"
+            tx_payload = {
+                "id": txn_id,
+                "userId": user_id,
+                "amount": total_credit,
+                "type": "DEPOSIT",
+                "status": "SUCCESS",
+                "method": "RAZORPAY",
+                "paymentId": payment_id,
+                "orderId": order_id,
+                "utr": f"COUPON:{coupon_code}" if coupon_applied_successfully else None,
+                "date": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            }
+            requests.post(f"{SUPABASE_URL}/rest/v1/transactions", headers=get_supabase_headers(), json=tx_payload, timeout=15)
+            
+        supabase_rpc("increment_balance", {"user_id": user_id, "amount": total_credit})
+        supabase_patch("users", {"id": f"eq.{user_id}"}, {"lastPaymentAt": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())})
+        
+        logger.info(f"User {user_id} successfully credited {total_credit} INR.")
+        return {"success": True, "credited": total_credit}
+
+
+# ==============================================================================
+# --- PLATFORM REST ENDPOINTS ---
+# ==============================================================================
+
+@app.route("/api/sync-user", methods=["POST"])
+@verify_auth
+def sync_user():
+    data = request.get_json(silent=True) or {}
+    name = data.get("name")
+    mobile = data.get("mobile")
+    referredByCode = data.get("referredByCode")
+    
+    user = request.user
+    user_id = user.get("id")
+    email = user.get("email")
+    
+    if name and len(str(name)) > 50:
+        return jsonify({"error": "Name too long."}), 400
+    if mobile and len(str(mobile)) > 15:
+        return jsonify({"error": "Mobile too long."}), 400
+    if referredByCode and len(str(referredByCode)) > 20:
+        return jsonify({"error": "Referral code too long."}), 400
+        
+    try:
+        user_list = supabase_get("users", {"id": f"eq.{user_id}"})
+        existing_user = user_list[0] if user_list else None
+        
+        if existing_user:
+            updates = {"lastLogin": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+            if name and not existing_user.get("name"):
+                updates["name"] = name
+            if mobile and not existing_user.get("mobile"):
+                updates["mobile"] = mobile
+                
+            if referredByCode and not existing_user.get("referred_by"):
+                ref_list = supabase_get("users", {"referral_code": f"eq.{referredByCode.upper()}"})
+                ref_user = ref_list[0] if ref_list else None
+                if ref_user and ref_user.get("id") != user_id:
+                    updates["referred_by"] = ref_user.get("id")
+                    
+                    config_data = supabase_get("settings", {"id": "eq.global"})
+                    config = config_data[0] if config_data else {}
+                    if config.get("isReferralSystemEnabled") and float(config.get("referralSignupBonus") or 0.0) > 0:
+                        bonus = float(config.get("referralSignupBonus"))
+                        supabase_rpc("increment_balance", {"user_id": user_id, "amount": bonus})
+                        tx_payload = {
+                            "id": f"ref_sign_{int(time.time() * 1000)}",
+                            "userId": user_id,
+                            "amount": bonus,
+                            "type": "DEPOSIT",
+                            "status": "SUCCESS",
+                            "method": "REFERRAL",
+                            "utr": "Signup Bonus",
+                            "date": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                        }
+                        requests.post(f"{SUPABASE_URL}/rest/v1/transactions", headers=get_supabase_headers(), json=tx_payload, timeout=15)
+                        
+            updated = supabase_patch("users", {"id": f"eq.{user_id}"}, updates)
+            updated_user = updated[0] if updated else existing_user
+            return jsonify({"success": True, "user": updated_user})
+            
+        if name:
+            name_check = supabase_get("users", {"name": f"eq.{name}"})
+            if name_check:
+                return jsonify({"error": "Username is already taken. Please try another."}), 400
+        if mobile:
+            mobile_check = supabase_get("users", {"mobile": f"eq.{mobile}"})
+            if mobile_check:
+                return jsonify({"error": "Mobile number is already registered."}), 400
+                
+        import random
+        import string
+        referral_code = f"U{user_id[:4]}{''.join(random.choices(string.digits, k=5))}".upper()
+        referred_by = None
+        
+        if referredByCode:
+            ref_list = supabase_get("users", {"referral_code": f"eq.{referredByCode.upper()}"})
+            ref_user = ref_list[0] if ref_list else None
+            if ref_user:
+                referred_by = ref_user.get("id")
+                
+        final_name = name or (email.split('@')[0] if email else "User")
+        try:
+            name_check = supabase_get("users", {"name": f"eq.{final_name}"})
+            if name_check and name_check[0].get("id") != user_id:
+                final_name = f"{final_name}_{random.randint(1000, 9999)}"
+        except Exception:
+            pass
+            
+        new_user = {
+            "id": user_id,
+            "email": email or "",
+            "name": final_name,
+            "mobile": mobile or None,
+            "role": "USER",
+            "balance": 0,
+            "totalSpent": 0,
+            "isBanned": False,
+            "createdAt": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            "lastLogin": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            "referral_code": referral_code,
+            "referred_by": referred_by,
+            "referral_balance": 0,
+            "total_referral_earnings": 0
+        }
+        
+        resp = requests.post(f"{SUPABASE_URL}/rest/v1/users", headers=get_supabase_headers(), json=new_user, timeout=15)
+        if resp.status_code not in [200, 201]:
+            err_json = resp.json() if resp.status_code == 400 else {}
+            err_msg = err_json.get("message", "")
+            if "users_name_key" in err_msg or "name" in err_msg:
+                return jsonify({"error": "Username is already taken."}), 400
+            if "users_mobile_key" in err_msg or "mobile" in err_msg:
+                return jsonify({"error": "Mobile number is already registered."}), 400
+            return jsonify({"error": f"Database error: {resp.text}"}), 400
+            
+        inserted_user = resp.json()[0] if isinstance(resp.json(), list) else resp.json()
+        return jsonify({"success": True, "user": inserted_user})
+        
+    except Exception as e:
+        logger.error(f"Failed to sync user: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/coupons/verify", methods=["POST"])
+@verify_auth
+def verify_coupon():
+    data = request.get_json(silent=True) or {}
+    code = data.get("code")
+    category = data.get("category")
+    amount = data.get("amount")
+    userId = data.get("userId")
+    
+    if not code or not category or amount is None or not userId:
+        return jsonify({"error": "Invalid input"}), 400
+        
+    if request.user.get("id") != userId:
+        return jsonify({"error": "Unauthorized user mismatch"}), 403
+        
+    try:
+        clean_code = str(code).strip().upper()
+        coupon_list = supabase_get("coupons", {"code": f"eq.{clean_code}"})
+        if not coupon_list:
+            return jsonify({"error": "This coupon doesn't exist or expired"}), 400
+            
+        c = coupon_list[0]
+        if not c.get("isEnabled"):
+            return jsonify({"error": "This coupon doesn't exist or expired"}), 400
+            
+        if c.get("expiryDate"):
+            try:
+                expiry_str = c.get("expiryDate").replace('Z', '')
+                expiry_struct = time.strptime(expiry_str.split('.')[0], "%Y-%m-%dT%H:%M:%S" if 'T' in expiry_str else "%Y-%m-%d %H:%M:%S")
+                if time.mktime(expiry_struct) < time.time():
+                    return jsonify({"error": "This coupon doesn't exist or expired"}), 400
+            except Exception as e:
+                logger.error(f"Coupon expiry parse error: {str(e)}")
+                return jsonify({"error": "This coupon doesn't exist or expired"}), 400
+                
+        if c.get("category") != category:
+            return jsonify({"error": "This coupon doesn't exist or expired"}), 400
+            
+        if float(amount) < float(c.get("minAmount") or 0.0):
+            return jsonify({"error": f"Minimum amount required to use this coupon is {c.get('minAmount')} INR."}), 400
+            
+        used_by = c.get("usedBy") or []
+        if not isinstance(used_by, list):
+            used_by = []
+            
+        if int(c.get("usageLimit") or 0) > 0 and len(used_by) >= int(c.get("usageLimit")):
+            return jsonify({"error": "This coupon has reached its usage limit."}), 400
+            
+        if userId in used_by:
+            return jsonify({"error": "You have already used this coupon."}), 400
+            
+        discount = 0.0
+        c_value = float(c.get("value") or 0.0)
+        if c.get("type") == 'PERCENTAGE':
+            discount = float(amount) * (c_value / 100.0)
+        else:
+            discount = c_value
+            
+        discount = min(float(amount), discount)
+        discount = round(discount, 2)
+        
+        return jsonify({
+            "success": True,
+            "coupon": {
+                "code": c.get("code"),
+                "type": c.get("type"),
+                "value": c_value,
+                "discount": discount
+            }
+        })
+    except Exception as e:
+        logger.error(f"Coupon verify error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/orders/place", methods=["POST"])
+@verify_auth
+def place_order_endpoint():
+    data = request.get_json(silent=True) or {}
+    userId = data.get("userId")
+    serviceId = str(data.get("serviceId") or "").strip()
+    serviceName = data.get("serviceName")
+    link = str(data.get("link") or "").strip()
+    quantity = data.get("quantity")
+    originalCost = data.get("originalCost")
+    couponCode = data.get("couponCode")
+    
+    if not userId or not serviceId or not serviceName or not link or quantity is None or originalCost is None:
+        return jsonify({"error": "Invalid input"}), 400
+        
+    if request.user.get("id") != userId:
+        return jsonify({"error": "Unauthorized user mismatch"}), 403
+        
+    try:
+        dup_params = {
+            "link": f"eq.{link}",
+            "serviceId": f"eq.{serviceId}",
+            "status": "in.(Pending,Processing)",
+            "limit": 1
+        }
+        dup_orders = supabase_get("orders", dup_params)
+        if dup_orders:
+            return jsonify({"error": "An active order for this link already exists."}), 400
+            
+        user = request.user
+        if user.get("isBanned"):
+            return jsonify({"error": "User is banned"}), 403
+            
+        srv_list = supabase_get("services", {"service": f"eq.{serviceId}"})
+        if not srv_list:
+            return jsonify({"error": "Service not found"}), 404
+            
+        db_service = srv_list[0]
+        min_qty = int(db_service.get("min") or 10)
+        if 0 <= min_qty <= 99:
+            min_qty = 100
+        max_qty = int(db_service.get("max") or 10000)
+        
+        if int(quantity) < min_qty or int(quantity) > max_qty:
+            return jsonify({"error": f"Quantity must be between {min_qty} and {max_qty}"}), 400
+            
+        price = float(db_service.get("rate") or 0.0)
+        config_data = supabase_get("settings", {"id": "eq.global"})
+        config = config_data[0] if config_data else {}
+        
+        margin_percent = float(db_service.get("customMarginPercent")) if db_service.get("customMarginPercent") is not None else float(config.get("globalMarginPercent") or 0.0)
+        margin_fixed = float(db_service.get("customMarginFixed")) if db_service.get("customMarginFixed") is not None else float(config.get("globalMarginFixed") or 0.0)
+        
+        if margin_percent:
+            price += price * (margin_percent / 100.0)
+        if margin_fixed:
+            price += margin_fixed
+            
+        final_cost = (price / 1000.0) * int(quantity)
+        final_cost = round(final_cost, 2)
+        
+        if couponCode:
+            clean_code = str(couponCode).strip().upper()
+            c_list = supabase_get("coupons", {"code": f"eq.{clean_code}"})
+            if not c_list:
+                return jsonify({"error": "This coupon doesn't exist or expired"}), 400
+            c = c_list[0]
+            if not c.get("isEnabled"):
+                return jsonify({"error": "This coupon doesn't exist or expired"}), 400
+            if c.get("expiryDate"):
+                try:
+                    expiry_str = c.get("expiryDate").replace('Z', '')
+                    expiry_struct = time.strptime(expiry_str.split('.')[0], "%Y-%m-%dT%H:%M:%S" if 'T' in expiry_str else "%Y-%m-%d %H:%M:%S")
+                    if time.mktime(expiry_struct) < time.time():
+                        return jsonify({"error": "This coupon doesn't exist or expired"}), 400
+                except Exception:
+                    return jsonify({"error": "This coupon doesn't exist or expired"}), 400
+            if c.get("category") != 'ORDER':
+                return jsonify({"error": "This coupon doesn't exist or expired"}), 400
+            if final_cost < float(c.get("minAmount") or 0.0):
+                return jsonify({"error": f"Minimum amount required to use this coupon is {c.get('minAmount')} INR."}), 400
+                
+            coupon_applied = supabase_rpc("use_coupon", {"coupon_code": c.get("code"), "user_id": userId})
+            if not coupon_applied:
+                return jsonify({"error": "Coupon is invalid, expired, or has reached its usage limit."}), 400
+                
+            c_val = float(c.get("value") or 0.0)
+            if c.get("type") == 'PERCENTAGE':
+                final_cost = final_cost - (final_cost * (c_val / 100.0))
+            else:
+                final_cost = final_cost - c_val
+                
+            final_cost = max(0.0, final_cost)
+            final_cost = round(final_cost, 2)
+            
+        user_bal = float(user.get("balance") or 0.0)
+        if user_bal < final_cost:
+            return jsonify({"error": "Insufficient balance."}), 400
+            
+        new_balance = round(user_bal - final_cost, 2)
+        supabase_patch("users", {"id": f"eq.{userId}"}, {"balance": new_balance})
+        
+        import random
+        import string
+        timestamp_ms = int(time.time() * 1000)
+        random_suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=5))
+        order_id = f"ord_{timestamp_ms}_{random_suffix}"
+        tx_id = f"txn_{timestamp_ms}"
+        
+        order_payload = {
+            "id": order_id,
+            "userId": userId,
+            "serviceId": serviceId,
+            "serviceName": serviceName,
+            "link": link,
+            "quantity": int(quantity),
+            "charge": final_cost,
+            "status": "Pending",
+            "externalId": "SYNC_IN_PROGRESS",
+            "remains": int(quantity),
+            "date": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        }
+        resp = requests.post(f"{SUPABASE_URL}/rest/v1/orders", headers=get_supabase_headers(), json=order_payload, timeout=15)
+        if resp.status_code not in [200, 201]:
+            supabase_patch("users", {"id": f"eq.{userId}"}, {"balance": user_bal})
+            return jsonify({"error": "Failed to create order record."}), 500
+            
+        tx_payload = {
+            "id": tx_id,
+            "userId": userId,
+            "amount": final_cost,
+            "type": "SPEND",
+            "status": "SUCCESS",
+            "method": "ORDER",
+            "utr": order_id,
+            "date": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        }
+        requests.post(f"{SUPABASE_URL}/rest/v1/transactions", headers=get_supabase_headers(), json=tx_payload, timeout=15)
+        
+        referred_by = user.get("referred_by")
+        if referred_by and final_cost > 0.0:
+            if config.get("isReferralSystemEnabled") and float(config.get("referral_commission_percent") or 0.0) > 0.0:
+                comm_pct = float(config.get("referral_commission_percent"))
+                commission = round((final_cost * comm_pct) / 100.0, 2)
+                if commission > 0.0:
+                    supabase_rpc("add_referral_commission", {"referrer_id": referred_by, "commission": commission})
+                    tx_ref_payload = {
+                        "id": f"ref_com_{timestamp_ms}_{random.randint(100, 999)}",
+                        "userId": referred_by,
+                        "amount": commission,
+                        "type": "REFERRAL_COMMISSION",
+                        "status": "SUCCESS",
+                        "method": "REFERRAL",
+                        "utr": f"Commission from order #{order_id} by {user.get('name') or 'referred user'}",
+                        "date": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                    }
+                    requests.post(f"{SUPABASE_URL}/rest/v1/transactions", headers=get_supabase_headers(), json=tx_ref_payload, timeout=15)
+                    
+        try:
+            res_provider = call_smm_provider(
+                action='add',
+                service=serviceId,
+                link=link,
+                quantity=int(quantity)
+            )
+            provider_id = res_provider.get("order") or res_provider.get("order_id")
+            if provider_id:
+                supabase_patch("orders", {"id": f"eq.{order_id}"}, {"externalId": str(provider_id), "status": "Processing"})
+                return jsonify({"success": True, "orderId": order_id})
+            elif "error" in res_provider:
+                err_msg = str(res_provider["error"]).lower()
+                if "duplicate" in err_msg or "already exists" in err_msg:
+                    history = call_smm_provider(action='orders')
+                    if isinstance(history, list):
+                        for item in history:
+                            if str(item.get("link")) == link and str(item.get("service")) == serviceId:
+                                match_order = item.get("order")
+                                if match_order:
+                                    supabase_patch("orders", {"id": f"eq.{order_id}"}, {"externalId": str(match_order), "status": "Processing"})
+                                    return jsonify({"success": True, "orderId": order_id})
+                                    
+                supabase_patch("users", {"id": f"eq.{userId}"}, {"balance": user_bal})
+                tx_ref_payload = {
+                    "id": f"ref_{timestamp_ms}",
+                    "userId": userId,
+                    "amount": final_cost,
+                    "type": "REFUND",
+                    "status": "SUCCESS",
+                    "method": "SYSTEM",
+                    "utr": f"Refund for Order #{order_id} ({res_provider['error']})",
+                    "date": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                }
+                requests.post(f"{SUPABASE_URL}/rest/v1/transactions", headers=get_supabase_headers(), json=tx_ref_payload, timeout=15)
+                supabase_patch("orders", {"id": f"eq.{order_id}"}, {"status": "Failed", "error": res_provider["error"]})
+                return jsonify({"error": f"Provider Error: {res_provider['error']}"}), 400
+                
+        except Exception as e:
+            logger.error(f"Sync provider forwarding failed: {str(e)}")
+            supabase_patch("orders", {"id": f"eq.{order_id}"}, {"externalId": None})
+            
+        return jsonify({"success": True, "orderId": order_id})
+    except Exception as e:
+        logger.error(f"Failed to place order: {str(e)}")
+        return jsonify({"error": "Server error"}), 500
+
+@app.route("/api/users/transfer-referral", methods=["POST"])
+@verify_auth
+def transfer_referral():
+    user_id = request.user.get("id")
+    try:
+        resp = requests.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/transfer_referral_balance",
+            headers=get_supabase_headers(),
+            json={"user_id": user_id},
+            timeout=15
+        )
+        if resp.status_code not in [200, 201]:
+            return jsonify({"error": f"RPC failed: {resp.text}"}), 400
+            
+        transfer_amount = resp.json()
+        if not transfer_amount or float(transfer_amount) <= 0.0:
+            return jsonify({"error": "No referral earnings to transfer."}), 400
+            
+        tx_payload = {
+            "id": f"ref_out_{int(time.time() * 1000)}",
+            "userId": user_id,
+            "amount": float(transfer_amount),
+            "type": "REFERRAL_PAYOUT",
+            "status": "SUCCESS",
+            "method": "WALLET_TRANSFER",
+            "date": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        }
+        requests.post(f"{SUPABASE_URL}/rest/v1/transactions", headers=get_supabase_headers(), json=tx_payload, timeout=15)
+        
+        u_list = supabase_get("users", {"id": f"eq.{user_id}"})
+        new_balance = u_list[0].get("balance") if u_list else 0.0
+        
+        return jsonify({"success": True, "newBalance": new_balance})
+    except Exception as e:
+        logger.error(f"Transfer referral error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/auth/lookup", methods=["POST"])
+def auth_lookup():
+    data = request.get_json(silent=True) or {}
+    action = data.get("action")
+    value = data.get("value")
+    
+    if not action or value is None:
+        return jsonify({"error": "Missing parameters"}), 400
+        
+    try:
+        if action == "getEmailByMobile":
+            u_list = supabase_get("users", {"mobile": f"eq.{str(value).strip()}"})
+            email = u_list[0].get("email") if u_list else None
+            return jsonify({"email": email})
+            
+        if action == "checkUsernameUnique":
+            u_list = supabase_get("users", {"name": f"eq.{str(value).strip()}"})
+            return jsonify({"unique": not bool(u_list)})
+            
+        if action == "checkMobileUnique":
+            u_list = supabase_get("users", {"mobile": f"eq.{str(value).strip()}"})
+            return jsonify({"unique": not bool(u_list)})
+            
+        return jsonify({"error": "Invalid lookup action"}), 400
+    except Exception as e:
+        logger.error(f"Auth lookup error: {str(e)}")
+        return jsonify({"error": "Server lookup failed"}), 500
+
+@app.route("/api/payments/create-order", methods=["POST"])
+@verify_auth
+def payments_create_order():
+    data = request.get_json(silent=True) or {}
+    amount = data.get("amount")
+    couponCode = data.get("couponCode")
+    
+    if amount is None or float(amount) < 1.0:
+        return jsonify({"error": "Invalid request parameters"}), 400
+        
+    user_id = request.user.get("id")
+    receipt = f"rcpt_{int(time.time())}_{user_id[:4]}"
+    
+    try:
+        order_id = None
+        rzp_order = None
+        
+        amount_paise = int(round(float(amount) * 100))
+        notes = {
+            "userId": user_id,
+            "couponCode": couponCode or ""
+        }
+        rzp_order = razorpay_create_order(amount_paise, receipt, notes)
+        if rzp_order:
+            order_id = rzp_order.get("id")
+            
+        txn_id = f"txn_{int(time.time() * 1000)}"
+        tx_payload = {
+            "id": txn_id,
+            "userId": user_id,
+            "amount": float(amount),
+            "type": "DEPOSIT",
+            "status": "PENDING",
+            "method": "RAZORPAY",
+            "orderId": order_id,
+            "utr": f"COUPON:{couponCode}" if couponCode else None,
+            "date": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        }
+        requests.post(f"{SUPABASE_URL}/rest/v1/transactions", headers=get_supabase_headers(), json=tx_payload, timeout=15)
+        
+        if rzp_order:
+            return jsonify(rzp_order)
+        else:
+            return jsonify({
+                "id": None,
+                "amount": amount_paise,
+                "currency": "INR",
+                "receipt": receipt,
+                "fallback": True
+            })
+    except Exception as e:
+        logger.error(f"Failed to create Razorpay order: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/payments/verify", methods=["POST"])
+@verify_auth
+def payments_verify():
+    data = request.get_json(silent=True) or {}
+    razorpay_order_id = data.get("razorpay_order_id")
+    razorpay_payment_id = data.get("razorpay_payment_id")
+    razorpay_signature = data.get("razorpay_signature")
+    amount = data.get("amount")
+    couponCode = data.get("couponCode")
+    
+    if not razorpay_order_id or not razorpay_payment_id or not razorpay_signature:
+        return jsonify({"error": "Invalid payment data"}), 400
+        
+    is_verified = verify_razorpay_signature(razorpay_order_id, razorpay_payment_id, razorpay_signature)
+    
+    if is_verified:
+        try:
+            user_id = request.user.get("id")
+            final_amount = 0.0
+            
+            rzp_order = razorpay_fetch_order(razorpay_order_id)
+            if rzp_order:
+                final_amount = float(rzp_order.get("amount", 0.0)) / 100.0
+            else:
+                final_amount = float(amount or 0.0)
+                
+            result = process_successful_payment(user_id, final_amount, razorpay_payment_id, razorpay_order_id, couponCode)
+            return jsonify(result)
+        except Exception as e:
+            logger.error(f"Manual verification process failed: {str(e)}")
+            return jsonify({"error": str(e)}), 500
+    else:
+        return jsonify({"success": False, "error": "Invalid signature"}), 400
+
+@app.route("/api/payments/webhook", methods=["POST"])
+def payments_webhook():
+    signature = request.headers.get("X-Razorpay-Signature")
+    raw_body = request.get_data()
+    
+    if RAZORPAY_WEBHOOK_SECRET:
+        if not signature:
+            logger.error("Missing signature header in webhook.")
+            return jsonify({"error": "Missing signature header"}), 400
+            
+        computed = hmac.new(
+            RAZORPAY_WEBHOOK_SECRET.encode('utf-8'),
+            raw_body,
+            hashlib.sha256
+        ).hexdigest()
+        
+        if not hmac.compare_digest(computed, signature):
+            logger.error("Webhook signature verification failed.")
+            return jsonify({"error": "Invalid webhook signature"}), 400
+    else:
+        logger.warning("RAZORPAY_WEBHOOK_SECRET is not configured. Processing without signature check.")
+        
+    try:
+        event_obj = json.loads(raw_body.decode('utf-8'))
+        event_name = event_obj.get("event")
+        logger.info(f"Processing webhook event: {event_name}")
+        
+        if event_name in ["payment.captured", "order.paid"]:
+            payload = event_obj.get("payload", {})
+            payment_entity = payload.get("payment", {}).get("entity", {}) if isinstance(payload.get("payment"), dict) else payload.get("payment", {})
+            order_entity = payload.get("order", {}).get("entity", {}) if isinstance(payload.get("order"), dict) else payload.get("order", {})
+            
+            payment_id = payment_entity.get("id")
+            rzp_order_id = payment_entity.get("order_id") or order_entity.get("id")
+            
+            if not payment_id:
+                logger.warn("Missing payment ID in payload.")
+                return jsonify({"status": "ignored", "reason": "missing payment id"})
+                
+            txn = None
+            if rzp_order_id:
+                tx_list = supabase_get("transactions", {"orderId": f"eq.{rzp_order_id}"})
+                txn = tx_list[0] if tx_list else None
+                
+            user_id = None
+            notes = payment_entity.get("notes") or order_entity.get("notes") or {}
+            if isinstance(notes, dict):
+                user_id = notes.get("userId") or notes.get("user_id")
+                
+            if not user_id and txn:
+                user_id = txn.get("userId")
+                
+            if not user_id:
+                logger.error(f"Could not associate payment {payment_id} with any user.")
+                return jsonify({"error": "User association failed"}), 400
+                
+            raw_amount = float(payment_entity.get("amount") or order_entity.get("amount") or ((txn.get("amount") * 100) if txn else 0))
+            amount = raw_amount / 100.0
+            
+            coupon_code = None
+            if isinstance(notes, dict):
+                coupon_code = notes.get("couponCode") or notes.get("coupon_code")
+            if not coupon_code and txn and txn.get("utr") and txn.get("utr").startswith("COUPON:"):
+                coupon_code = txn.get("utr").replace("COUPON:", "")
+                
+            result = process_successful_payment(user_id, amount, payment_id, rzp_order_id, coupon_code)
+            return jsonify({"status": "processed", **result})
+            
+        return jsonify({"status": "ignored", "event": event_name})
+    except Exception as e:
+        logger.error(f"Webhook processing error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ==============================================================================
 # --- BOOTSTRAPPING BACKGROUND THREADS ---
 def start_threads():
     threading.Thread(target=forward_pending_orders_loop, daemon=True).start()

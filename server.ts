@@ -221,11 +221,14 @@ async function startServer() {
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
       const allowedOrigins = [
-        'socialuphub-smm.web.app',
-        'socialuphub.in',
+        'socialuphub',
+        'web.app',
+        'firebaseapp.com',
         'localhost',
+        '127.0.0.1',
         'run.app',
-        'github.dev'
+        'github.dev',
+        'gitpod.io'
       ];
       const isAllowed = allowedOrigins.some(domain => origin.toLowerCase().includes(domain));
       if (isAllowed) {
