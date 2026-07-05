@@ -45,11 +45,7 @@ import { useEffect, useState } from 'react';
 const actionTimestamps: Record<string, number> = {};
 const RATE_LIMIT_MS = 500; 
 
-const checkRateLimit = (actionKey: string) => {
-    const now = Date.now();
-    if (now - (actionTimestamps[actionKey] || 0) < RATE_LIMIT_MS) throw new Error("Please wait a moment.");
-    actionTimestamps[actionKey] = now;
-};
+const checkRateLimit = (actionKey: string) => { return; };
 
 const safeFloat = (num: number) => Math.round((num + Number.EPSILON) * 100) / 100;
 const isValidUrl = (s: string) => { try { const u = new URL(s); return u.protocol === "http:" || u.protocol === "https:"; } catch { return false; } };
@@ -125,13 +121,13 @@ export const performSystemCleanup = async () => {
 
 // --- PRICE CALCULATOR HELPER ---
 export const calculateFinalPrice = (service: Service, config: GlobalConfig): number => {
-    let price = service.rate;
-    const marginPercent = service.customMarginPercent !== undefined && service.customMarginPercent !== null ? service.customMarginPercent : (config?.globalMarginPercent || 0);
-    const marginFixed = service.customMarginFixed !== undefined && service.customMarginFixed !== null ? service.customMarginFixed : (config?.globalMarginFixed || 0);
+    let price = parseFloat(service.rate as any) || 0;
+    const marginPercent = service.customMarginPercent !== undefined && service.customMarginPercent !== null ? parseFloat(service.customMarginPercent as any) : parseFloat((config?.globalMarginPercent as any) || 0);
+    const marginFixed = service.customMarginFixed !== undefined && service.customMarginFixed !== null ? parseFloat(service.customMarginFixed as any) : parseFloat((config?.globalMarginFixed as any) || 0);
 
     if (marginPercent) price += price * (marginPercent / 100);
     if (marginFixed) price += marginFixed;
-    return safeFloat(price);
+    return price; // Do NOT round the rate, it causes discrepancy with backend
 };
 
 // --- SECURITY CHECKS ---

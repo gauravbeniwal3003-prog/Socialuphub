@@ -7,7 +7,7 @@ import { supabase } from '../../services/supabase';
 import { Card, Button, Input, Notification, Badge } from '../ui/Components';
 import { Service, Order, OrderStatus, GlobalConfig, Category, Transaction } from '../../types';
 import { CONTACT_WHATSAPP_URL, CURRENCY_SYMBOL, RAZORPAY_KEY_ID, RAZORPAY_MERCHANT_NAME } from '../../constants';
-import { Search, Wallet, RefreshCw, X, MessageCircle, Lock, Edit2, ShieldCheck, ChevronDown, ArrowDownLeft, ShoppingBag, Clock, ExternalLink, TrendingUp, Upload, Check, AlertTriangle, PlayCircle, Instagram, Youtube, Twitter, Facebook, Copy, Zap, Gift, Share2, CheckCircle } from 'lucide-react';
+import { Search, Wallet, RefreshCw, X, MessageCircle, Lock, Edit2, ShieldCheck, ChevronDown, ArrowDownLeft, ShoppingBag, Clock, ExternalLink, TrendingUp, Upload, Check, AlertTriangle, PlayCircle, Instagram, Youtube, Twitter, Facebook, Copy, Zap, Gift, Share2, CheckCircle, Loader2 } from 'lucide-react';
 import { ReferralSection } from './ReferralSection';
 import { ApiDocsSection } from './ApiDocsSection';
 import { Logo } from '../ui/Logo';
@@ -265,6 +265,13 @@ const NewOrderSection = () => {
 
     return (
         <div className="max-w-2xl mx-auto space-y-6 animate-in slide-in-from-bottom-4 duration-500 px-0">
+            {loading && (
+                <div className="fixed inset-0 z-[9999] bg-[#0a110c]/90 backdrop-blur-md flex flex-col items-center justify-center text-white">
+                    <Loader2 className="w-16 h-16 animate-spin text-[var(--app-accent)] mb-4" />
+                    <h3 className="text-2xl font-black mb-2 animate-pulse">Placing Order...</h3>
+                    <p className="text-sm text-neutral-400 font-medium max-w-xs text-center">Please wait while we establish a secure connection with the provider.</p>
+                </div>
+            )}
             {notification && <Notification message={notification.msg} type={notification.type} onClose={() => setNotification(null)} />}
             
             {/* WELCOME CARD */}

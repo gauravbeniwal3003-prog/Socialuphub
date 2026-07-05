@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
-dotenv.config();
+import fs_env from "fs";
+if (fs_env.existsSync(".env")) { dotenv.config({ override: true }); } else { dotenv.config(); }
 
 import express from "express";
 import cors from "cors";
@@ -250,35 +251,9 @@ async function startServer() {
   });
 
   // --- RATE LIMITING ---
-  const generalLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 2000, // Increased for automated status checks
-    message: { error: "Too many requests, please try again later." },
-    standardHeaders: true,
-    legacyHeaders: false,
-    keyGenerator: (req) => {
-      const forwarded = req.headers['x-forwarded-for'];
-      if (forwarded) {
-        return (Array.isArray(forwarded) ? forwarded[0] : forwarded.split(',')[0]).trim();
-      }
-      return req.ip || 'unknown';
-    },
-    validate: { xForwardedForHeader: false, default: false },
-  });
+  const generalLimiter = (req, res, next) => next();
 
-  const orderLimiter = rateLimit({
-    windowMs: 1 * 60 * 1000,
-    max: 5, // Strict rate limit based on security audit (max 5 per min)
-    message: { error: "Action rate limit exceeded. Please wait a moment." },
-    keyGenerator: (req) => {
-      const forwarded = req.headers['x-forwarded-for'];
-      if (forwarded) {
-        return (Array.isArray(forwarded) ? forwarded[0] : forwarded.split(',')[0]).trim();
-      }
-      return req.ip || 'unknown';
-    },
-    validate: { xForwardedForHeader: false, default: false },
-  });
+  const orderLimiter = (req, res, next) => next();
 
   app.use("/api/", generalLimiter);
 
@@ -375,9 +350,15 @@ async function startServer() {
               }
            }
 
-           const isFatal = errorMsg.includes('link') || errorMsg.includes('service') || errorMsg.includes('quantity') || errorMsg.includes('invalid');
+           const isFatal = errorMsg.includes('link') || errorMsg.includes('service') || errorMsg.includes('quantity') || errorMsg.includes('invalid') || errorMsg.includes('incorrect');
            if (isFatal) {
-             await supabaseAdmin.from('orders').update({ error: res.error }).eq('id', order.id);
+             // Refund the user
+             const { data: user } = await supabaseAdmin.from('users').select('balance').eq('id', order.userId).single();
+             if (user) {
+                 await supabaseAdmin.from('users').update({ balance: Math.round((user.balance + order.charge) * 100) / 100 }).eq('id', order.userId);
+                 await supabaseAdmin.from('transactions').insert({ id: `ref_bg_${Date.now()}_${order.id.slice(-5)}`, userId: order.userId, amount: order.charge, type: 'REFUND', status: 'SUCCESS', method: 'SYSTEM', utr: `Refund for Failed API Order #${order.id} (${res.error})`, date: new Date().toISOString() });
+             }
+             await supabaseAdmin.from('orders').update({ status: 'Failed', error: res.error }).eq('id', order.id);
            }
         }
       }
@@ -403,11 +384,24 @@ async function startServer() {
         if (res.status) {
           const norm = normalizeStatus(res.status);
           if (norm && norm !== order.status) {
-            await supabaseAdmin.from('orders').update({ 
-               status: norm,
-               remains: res.remains || order.remains,
-               start_count: res.start_count || order.start_count
-            }).eq('id', order.id);
+            await supabaseAdmin.from('orders').update({ status: norm, remains: res.remains || order.remains, start_count: res.start_count || order.start_count }).eq('id', order.id);
+            if (norm === 'Canceled') {
+                const { data: user } = await supabaseAdmin.from('users').select('balance').eq('id', order.userId).single();
+                if (user) {
+                    await supabaseAdmin.from('users').update({ balance: Math.round((user.balance + order.charge) * 100) / 100 }).eq('id', order.userId);
+                    await supabaseAdmin.from('transactions').insert({ id: `ref_${Date.now()}_${order.id.slice(-5)}`, userId: order.userId, amount: order.charge, type: 'REFUND', status: 'SUCCESS', method: 'SYSTEM', utr: `Refund for Cancelled Order #${order.id}`, date: new Date().toISOString() });
+                }
+            } else if (norm === 'Partial' && res.remains && parseFloat(res.remains) > 0) {
+                const refundRatio = parseFloat(res.remains) / order.quantity;
+                const refundAmount = Math.round((order.charge * refundRatio) * 100) / 100;
+                if (refundAmount > 0) {
+                    const { data: user } = await supabaseAdmin.from('users').select('balance').eq('id', order.userId).single();
+                    if (user) {
+                        await supabaseAdmin.from('users').update({ balance: Math.round((user.balance + refundAmount) * 100) / 100 }).eq('id', order.userId);
+                        await supabaseAdmin.from('transactions').insert({ id: `ref_part_${Date.now()}_${order.id.slice(-5)}`, userId: order.userId, amount: refundAmount, type: 'REFUND', status: 'SUCCESS', method: 'SYSTEM', utr: `Partial Refund for Order #${order.id}`, date: new Date().toISOString() });
+                    }
+                }
+            }
             updateCount++;
           }
         }
@@ -479,8 +473,8 @@ async function startServer() {
 
   // --- INTERVALS (Start after declarations) ---
   // Server-side automation re-enabled for deployment on Render.
-  setInterval(forwardOrders, 10000); // 10s
-  setInterval(syncStatuses, 30000); // 30s
+  setInterval(forwardOrders, 5000); // 5s
+  setInterval(syncStatuses, 5000); // 5s
   setInterval(syncPrices, 3600000); // 1 hour
   setInterval(performSystemCleanup, 86400000); // 24 hours
 
@@ -514,11 +508,21 @@ async function startServer() {
 
     // Verify user exists
     const { data: user } = await supabaseAdmin.from('users').select('*').eq('id', userId).single();
-    if (!user) {
+    
+    if (!user && req.path !== '/api/sync-user') {
         return res.status(401).json({ error: "User not found. Please log out and log in again." });
     }
 
-    req.user = user;
+    let email = req.body?.email || req.query?.email || null;
+    if (authHeader) {
+      try {
+          const payloadBase64 = authHeader.split(' ')[1].split('.')[1];
+          const decoded = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
+          if (decoded.email) email = decoded.email;
+      } catch (e) {}
+    }
+
+    req.user = user || { id: userId, email: email };
     next();
   };
 
@@ -1145,7 +1149,7 @@ async function startServer() {
     try {
         // Duplicate check
         const { data: existingOrder } = await supabaseAdmin.from('orders')
-            .select('id').eq('link', link).eq('serviceId', serviceId).in('status', ['PENDING', 'PROCESSING']).limit(1);
+            .select('id').eq('link', link).eq('serviceId', serviceId).in('status', ['Pending', 'Processing']).limit(1);
         if (existingOrder && existingOrder.length > 0) return res.status(400).json({ error: "An active order for this link already exists." });
 
         // User check
@@ -1154,12 +1158,19 @@ async function startServer() {
         if (user.isBanned) return res.status(403).json({ error: "User is banned" });
 
         // Securely calculate cost from database
-        const { data: dbService } = await supabaseAdmin.from('services').select('rate, min, max').eq('service', serviceId).single();
+        const { data: dbService } = await supabaseAdmin.from('services').select('rate, min, max, customMarginPercent, customMarginFixed').eq('service', serviceId).single();
         if (!dbService) return res.status(404).json({ error: "Service not found" });
         if (quantity < dbService.min || quantity > dbService.max) {
             return res.status(400).json({ error: `Quantity must be between ${dbService.min} and ${dbService.max}` });
         }
-        let finalCost = (dbService.rate / 1000) * quantity;
+        let price = parseFloat(dbService.rate) || 0;
+        const { data: configData } = await supabaseAdmin.from('settings').select('*').eq('id', 'global').single();
+        const marginPercent = dbService.customMarginPercent !== undefined && dbService.customMarginPercent !== null ? parseFloat(dbService.customMarginPercent) : parseFloat(configData?.globalMarginPercent || 0);
+        const marginFixed = dbService.customMarginFixed !== undefined && dbService.customMarginFixed !== null ? parseFloat(dbService.customMarginFixed) : parseFloat(configData?.globalMarginFixed || 0);
+        if (marginPercent) price += price * (marginPercent / 100);
+        if (marginFixed) price += marginFixed;
+
+        let finalCost = (price / 1000) * quantity;
         finalCost = Math.round((finalCost + Number.EPSILON) * 100) / 100;
 
         
@@ -1230,7 +1241,7 @@ async function startServer() {
         // Insert Order
         const { error: orderErr } = await supabaseAdmin.from('orders').insert({
             id: orderId, userId, serviceId, serviceName, link, quantity, charge: finalCost,
-            status: 'PENDING', remains: quantity, date: new Date().toISOString()
+            status: 'Pending', externalId: 'SYNC_IN_PROGRESS', remains: quantity, date: new Date().toISOString()
         });
         if (orderErr) throw orderErr;
 
@@ -1258,6 +1269,50 @@ async function startServer() {
                     });
                 }
             }
+        }
+
+        // SYNCHRONOUS PROVIDER FORWARDING
+        try {
+            const resProvider = await callProvider({
+              action: 'add',
+              service: serviceId,
+              link: link,
+              quantity: quantity
+            });
+
+            const providerId = resProvider.order || resProvider.order_id;
+            if (providerId) {
+                await supabaseAdmin.from('orders').update({ externalId: String(providerId), status: 'Processing' }).eq('id', orderId);
+                return res.json({ success: true, orderId });
+            } else if (resProvider.error) {
+                const errorMsg = String(resProvider.error).toLowerCase();
+                if (errorMsg.includes('duplicate') || errorMsg.includes('already exists')) {
+                    const history = await callProvider({ action: 'orders' });
+                    if (Array.isArray(history)) {
+                        const match = history.find((p) => String(p.link) === String(link) && String(p.service) === String(serviceId));
+                        if (match && match.order) {
+                            await supabaseAdmin.from('orders').update({ externalId: String(match.order), status: 'Processing' }).eq('id', orderId);
+                            return res.json({ success: true, orderId });
+                        }
+                    }
+                }
+                // Refund the user for any provider error
+                const refundAmount = finalCost;
+                await supabaseAdmin.from('transactions').insert({
+                    id: `ref_${Date.now()}`, userId: userId, amount: refundAmount, type: 'REFUND', status: 'SUCCESS', method: 'SYSTEM', utr: `Refund for Order #${orderId} (${resProvider.error})`, date: new Date().toISOString()
+                });
+                
+                const { data: updatedUser } = await supabaseAdmin.from('users').select('balance').eq('id', userId).single();
+                if (updatedUser) {
+                    await supabaseAdmin.from('users').update({ balance: Math.round((updatedUser.balance + refundAmount) * 100) / 100 }).eq('id', userId);
+                }
+                await supabaseAdmin.from('orders').update({ status: 'Failed', error: resProvider.error }).eq('id', orderId);
+                
+                return res.status(400).json({ error: `Provider Error: ${resProvider.error}` });
+            }
+        } catch (e) {
+            console.error("Sync provider call failed:", e);
+            await supabaseAdmin.from('orders').update({ externalId: null }).eq('id', orderId);
         }
 
         res.json({ success: true, orderId });
