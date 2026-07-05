@@ -306,8 +306,8 @@ export const transferReferralBalance = async (userId: string) => {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) throw new Error("Not authenticated");
 
-        const backendBase = getRenderBackendUrl();
-        const urlObj = backendBase ? `${backendBase.replace(/\/$/, "")}/api/users/transfer-referral` : "/api/users/transfer-referral";
+         
+        const urlObj = "/api/users/transfer-referral";
         
         const response = await fetch(urlObj, {
             method: 'POST',
@@ -391,8 +391,7 @@ const callSmmApi = async (params: URLSearchParams, retries = 2): Promise<any> =>
             body[key] = value;
         });
 
-        const backendBase = getRenderBackendUrl();
-        const urlObj = backendBase ? `${backendBase.replace(/\/$/, "")}/api/smm` : "/api/smm";
+        const urlObj = "/api/smm";
 
         const response = await fetch(urlObj, {
             method: "POST",
@@ -610,8 +609,7 @@ export const placeOrder = async (userId: string, serviceId: string, serviceName:
       const user = await checkUserSecurity(userId);
 
       const { data: { session } } = await supabase.auth.getSession();
-      const backendBase = getRenderBackendUrl();
-      const urlObj = backendBase ? `${backendBase.replace(/\/$/, "")}/api/orders/place` : "/api/orders/place";
+      const urlObj = "/api/orders/place";
       
       const response = await fetch(urlObj, {
           method: 'POST',
@@ -645,8 +643,7 @@ export const handleRazorpaySuccess = async (userId: string, amount: number, paym
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) throw new Error("Authentication required for payment verification");
 
-            const backendBase = getRenderBackendUrl();
-            const urlObj = backendBase ? `${backendBase.replace(/\/$/, "")}/api/payments/verify` : "/api/payments/verify";
+            const urlObj = "/api/payments/verify";
 
             const response = await fetch(urlObj, {
                 method: 'POST',
@@ -1044,8 +1041,8 @@ export const startAutoSync = () => {
 }
 export const checkUsernameUnique = async (n: string) => { 
     try {
-        const backendBase = getRenderBackendUrl();
-        const urlObj = `${backendBase.replace(/\/$/, "")}/api/auth/lookup`;
+         
+        const urlObj = "/api/auth/lookup";
         const response = await fetch(urlObj, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1061,8 +1058,8 @@ export const checkUsernameUnique = async (n: string) => {
 export const checkMobileUnique = async (m: string) => { 
     if (!m) return true;
     try {
-        const backendBase = getRenderBackendUrl();
-        const urlObj = `${backendBase.replace(/\/$/, "")}/api/auth/lookup`;
+         
+        const urlObj = "/api/auth/lookup";
         const response = await fetch(urlObj, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1077,8 +1074,8 @@ export const checkMobileUnique = async (m: string) => {
 };
 export const getEmailByMobile = async (m: string) => { 
     try {
-        const backendBase = getRenderBackendUrl();
-        const urlObj = `${backendBase.replace(/\/$/, "")}/api/auth/lookup`;
+         
+        const urlObj = "/api/auth/lookup";
         const response = await fetch(urlObj, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
