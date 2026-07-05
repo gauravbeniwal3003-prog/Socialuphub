@@ -332,7 +332,7 @@ export const transferReferralBalance = async (userId: string) => {
         if (!session) throw new Error("Not authenticated");
 
          
-        const urlObj = `${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/users/transfer-referral`;
+        const urlObj = `${getBaseApiUrl()}/api/users/transfer-referral`;
         
         const response = await fetch(urlObj, {
             method: 'POST',
@@ -407,6 +407,14 @@ const getRenderBackendUrl = (): string => {
     return 'https://socialuphub-backend.onrender.com';
 };
 
+// Helper to get the base API URL dynamically (supporting Admin Panel configuration)
+export const getBaseApiUrl = (): string => {
+    if (import.meta.env.VITE_API_URL) {
+        return import.meta.env.VITE_API_URL.replace(/\/$/, "");
+    }
+    return getRenderBackendUrl().replace(/\/$/, "");
+};
+
 // --- UPDATED API CALLER USING SECURE BACKEND PROXY ---
 const callSmmApi = async (params: URLSearchParams, retries = 2): Promise<any> => {
     try {
@@ -415,7 +423,7 @@ const callSmmApi = async (params: URLSearchParams, retries = 2): Promise<any> =>
             body[key] = value;
         });
 
-        const urlObj = `${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/smm`;
+        const urlObj = `${getBaseApiUrl()}/api/smm`;
 
         const response = await fetch(urlObj, {
             method: "POST",
@@ -473,7 +481,7 @@ export const createRazorpayOrder = async (amount: number, userId: string, coupon
     try {
         const { data: { session } } = await supabase.auth.getSession();
         if (session) {
-            const response = await fetch(`${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/payments/create-order`, {
+            const response = await fetch(`${getBaseApiUrl()}/api/payments/create-order`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -660,7 +668,7 @@ export const placeOrder = async (userId: string, serviceId: string, serviceName:
       const user = await checkUserSecurity(userId);
 
       const { data: { session } } = await supabase.auth.getSession();
-      const urlObj = `${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/orders/place`;
+      const urlObj = `${getBaseApiUrl()}/api/orders/place`;
       
       const response = await fetch(urlObj, {
           method: 'POST',
@@ -691,7 +699,7 @@ export const handleRazorpaySuccess = async (userId: string, amount: number, paym
             const { data: { session } } = await supabase.auth.getSession();
             if (!session) throw new Error("Authentication required for payment verification");
 
-            const urlObj = `${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/payments/verify`;
+            const urlObj = `${getBaseApiUrl()}/api/payments/verify`;
 
             const response = await fetch(urlObj, {
                 method: 'POST',
@@ -1099,7 +1107,7 @@ export const startAutoSync = () => {
 export const checkUsernameUnique = async (n: string) => { 
     try {
          
-        const urlObj = `${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/auth/lookup`;
+        const urlObj = `${getBaseApiUrl()}/api/auth/lookup`;
         const response = await fetch(urlObj, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1115,7 +1123,7 @@ export const checkMobileUnique = async (m: string) => {
     if (!m) return true;
     try {
          
-        const urlObj = `${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/auth/lookup`;
+        const urlObj = `${getBaseApiUrl()}/api/auth/lookup`;
         const response = await fetch(urlObj, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1130,7 +1138,7 @@ export const checkMobileUnique = async (m: string) => {
 export const getEmailByMobile = async (m: string) => { 
     try {
          
-        const urlObj = `${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/auth/lookup`;
+        const urlObj = `${getBaseApiUrl()}/api/auth/lookup`;
         const response = await fetch(urlObj, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

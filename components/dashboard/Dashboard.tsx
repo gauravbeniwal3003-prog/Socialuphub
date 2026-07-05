@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useStore, fetchServices, getConfig, placeOrder, fetchOrders, fetchTransactions, updateUserPassword, fetchCategories, handleRazorpaySuccess, calculateFinalPrice, fetchUserHistory, createRazorpayOrder } from '../../services/mockStore';
+import { useStore, fetchServices, getConfig, placeOrder, fetchOrders, fetchTransactions, updateUserPassword, fetchCategories, handleRazorpaySuccess, calculateFinalPrice, fetchUserHistory, createRazorpayOrder, getBaseApiUrl } from '../../services/mockStore';
 import { useAuth } from '../../App';
 import { supabase } from '../../services/supabase';
 import { Card, Button, Input, Notification, Badge } from '../ui/Components';
@@ -213,7 +213,7 @@ const NewOrderSection = () => {
         setCoupon('');
         try {
             const { data: { session } } = await supabase.auth.getSession();
-            const response = await fetch(`${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/coupons/verify`, {
+            const response = await fetch(`${getBaseApiUrl()}/api/coupons/verify`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -786,7 +786,7 @@ const AddFundsSection = () => {
         setVerifiedCoupon(null);
         try {
             const { data: { session } } = await supabase.auth.getSession();
-            const response = await fetch(`${import.meta.env.VITE_API_URL || (import.meta.env.PROD ? 'https://socialuphub-backend.onrender.com' : '')}/api/coupons/verify`, {
+            const response = await fetch(`${getBaseApiUrl()}/api/coupons/verify`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
