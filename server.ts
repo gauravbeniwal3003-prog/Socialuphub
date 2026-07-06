@@ -2139,6 +2139,47 @@ async function startServer() {
     }
   });
 
+  const dbProxySchema = z.object({
+    table: z.string(),
+    action: z.enum(['insert', 'update', 'upsert', 'delete']),
+    payload: z.any().optional(),
+    match: z.record(z.string(), z.any()).optional(),
+    neq: z.record(z.string(), z.any()).optional(),
+    inFilter: z.object({ column: z.string(), values: z.array(z.any()) }).optional(),
+  });
+
+  app.post("/api/admin/db-proxy", verifyAllowedSource, verifyAdmin, async (req, res) => {
+    try {
+      const validation = dbProxySchema.safeParse(req.body);
+      if (!validation.success) return res.status(400).json({ error: "Invalid proxy payload" });
+      
+      const { table, action, payload, match, neq, inFilter } = validation.data;
+      let query = supabaseAdmin.from(table)[action](payload as any);
+      
+      if (match) {
+        for (const [key, value] of Object.entries(match)) {
+          query = query.eq(key, value);
+        }
+      }
+      if (neq) {
+        for (const [key, value] of Object.entries(neq)) {
+          query = query.neq(key, value);
+        }
+      }
+      if (inFilter) {
+        query = query.in(inFilter.column, inFilter.values);
+      }
+      
+      const { data, error } = await query;
+      if (error) throw new Error(error.message);
+      
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      console.error("[DB Proxy Error]:", e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post("/api/admin/update-balance", verifyAllowedSource, verifyAdmin, async (req, res) => {
     const validation = balanceUpdateSchema.safeParse(req.body);
     if (!validation.success) return res.status(400).json({ error: "Invalid input" });

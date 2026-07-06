@@ -3,6 +3,7 @@ import { supabase } from '../../services/supabase';
 import { Button, Input } from '../ui/Components';
 import { ShieldAlert, Ban, Activity, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../../App';
+import { getBaseApiUrl } from '../../services/mockStore';
 
 export const SecurityManagement = ({ notify }: { notify: (msg: string, type: 'success' | 'error') => void }) => {
     const { user } = useAuth();
@@ -18,16 +19,14 @@ export const SecurityManagement = ({ notify }: { notify: (msg: string, type: 'su
             const { data: session } = await supabase.auth.getSession();
             const token = session?.session?.access_token;
             
-            const origin = window.location.origin.toLowerCase();
-            const backendBase = (origin.includes('socialuphub.in') || origin.includes('socialuphub-smm.web.app')) 
-                ? 'https://socialuphub-backend.onrender.com' : window.location.origin;
+            const backendBase = getBaseApiUrl();
                 
             const res = await fetch(`${backendBase}/api/admin/security/logs`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
-            if (!res.ok) throw new Error("Failed to fetch security logs");
-            
             const data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Failed to fetch security logs");
+            
             setLogs(data.logs || []);
             setBannedIps(data.bannedIps || []);
         } catch (e: any) {
@@ -45,8 +44,7 @@ export const SecurityManagement = ({ notify }: { notify: (msg: string, type: 'su
         try {
             const { data: session } = await supabase.auth.getSession();
             const token = session?.session?.access_token;
-            const backendBase = (window.location.origin.includes('socialuphub.in') || window.location.origin.includes('socialuphub-smm.web.app')) 
-                ? 'https://socialuphub-backend.onrender.com' : window.location.origin;
+            const backendBase = getBaseApiUrl();
                 
             const res = await fetch(`${backendBase}/api/admin/security/ban`, {
                 method: 'POST',
@@ -69,8 +67,7 @@ export const SecurityManagement = ({ notify }: { notify: (msg: string, type: 'su
         try {
             const { data: session } = await supabase.auth.getSession();
             const token = session?.session?.access_token;
-            const backendBase = (window.location.origin.includes('socialuphub.in') || window.location.origin.includes('socialuphub-smm.web.app')) 
-                ? 'https://socialuphub-backend.onrender.com' : window.location.origin;
+            const backendBase = getBaseApiUrl();
                 
             const res = await fetch(`${backendBase}/api/admin/security/unban`, {
                 method: 'POST',

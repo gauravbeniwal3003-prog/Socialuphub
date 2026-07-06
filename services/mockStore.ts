@@ -384,7 +384,7 @@ export const getReferralStats = async (userId: string) => {
 // --- ACTIONS ---
 
 export const updateConfig = async (newConfig: Partial<GlobalConfig>) => {
-    try { await supabase.from('settings').upsert({ id: 'global', ...newConfig }); invalidateCache(['suh_cache_config']); } catch (e) { handleSupabaseError(e); }
+    try { await adminDbProxy({ table: 'settings', action: 'upsert', payload: { id: 'global', ...newConfig } }); invalidateCache(['suh_cache_config']); } catch (e) { handleSupabaseError(e); }
 };
 
 // Helper to dynamically get Render Backend URL from local cache
@@ -435,6 +435,26 @@ const getRenderBackendUrl = (): string => {
 };
 
 // Helper to get the base API URL dynamically (supporting Admin Panel configuration)
+
+export const adminDbProxy = async (payload: any) => {
+    const { data: session } = await supabase.auth.getSession();
+    const token = session?.session?.access_token;
+    if (!token) throw new Error("No session");
+    
+    const url = `${getBaseApiUrl()}/api/admin/db-proxy`;
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(payload)
+    });
+    const result = await res.json();
+    if (!res.ok || result.error) throw new Error(result.error || "DB Proxy Error");
+    return result;
+};
+
 export const getBaseApiUrl = (): string => {
     if (import.meta.env.VITE_API_URL) {
         return import.meta.env.VITE_API_URL.replace(/\/$/, "");
@@ -803,8 +823,8 @@ export const updateService = async (s: Service) => {
     await supabase.from('services').update(cleaned).eq('service', s.service); 
     invalidateCache(['suh_cache_services']); 
 };
-export const updateUser = async (u: User) => { const { balance, totalSpent, ...safeUpdate } = u; await supabase.from('users').update(safeUpdate).eq('id', u.id); invalidateCache(['suh_cache_users']); };
-export const deleteUser = async (uid: string) => { await supabase.from('users').delete().eq('id', uid); invalidateCache(['suh_cache_users']); };
+export const updateUser = async (u: User) => { const { balance, totalSpent, ...safeUpdate } = u; await adminDbProxy({ table: 'users', action: 'update', payload: safeUpdate, match: { id: u.id } }); invalidateCache(['suh_cache_users']); };
+export const deleteUser = async (uid: string) => { await adminDbProxy({ table: 'users', action: 'delete', match: { id: uid } }); invalidateCache(['suh_cache_users']); };
 
 // --- ROBUST ORDER SYNC LOGIC ---
 const normalizeStatus = (status: string): OrderStatus | null => {
@@ -860,17 +880,17 @@ export const syncOrderStatuses = async () => {
 };
 
 export const createCoupon = async (c: Coupon) => { 
-    const { error } = await supabase.from('coupons').insert(c); 
+    await adminDbProxy({ table: 'coupons', action: 'insert', payload: c }); const error = null; 
     if (error) throw new Error(error.message);
     invalidateCache(['suh_cache_coupons']); 
 };
 export const deleteCoupon = async (code: string) => { 
-    const { error } = await supabase.from('coupons').delete().eq('code', code); 
+    await adminDbProxy({ table: 'coupons', action: 'delete', match: { code } }); const error = null; 
     if (error) throw new Error(error.message);
     invalidateCache(['suh_cache_coupons']); 
 };
 export const toggleCouponStatus = async (code: string, s: boolean) => { 
-    const { error } = await supabase.from('coupons').update({ isEnabled: !s }).eq('code', code); 
+    await adminDbProxy({ table: 'coupons', action: 'update', payload: { isEnabled: !s }, match: { code } }); const error = null; 
     if (error) throw new Error(error.message);
     invalidateCache(['suh_cache_coupons']); 
 };
@@ -1281,8 +1301,8 @@ export const manualFundUpdate = async (uid: string, amt: number, type: 'ADD'|'DE
     const { data: u } = await supabase.from('users').select('*').eq('id', uid).single(); 
     if(!u) throw new Error("User not found"); 
     let newBal = type === 'ADD' ? u.balance + amt : u.balance - amt;
-    const { data: updatedData } = await supabase.from('users').update({ balance: safeFloat(newBal) }).eq('id', uid).select(); 
-    await supabase.from('transactions').insert({ id: `adm_${Date.now()}`, userId: uid, amount: amt, type: type === 'ADD' ? 'DEPOSIT' : 'ADJUSTMENT', status: 'SUCCESS', method: 'ADMIN', utr: reason, date: getISTTime() }); 
+    const { data: updatedData } = await adminDbProxy({ table: 'users', action: 'update', payload: { balance: safeFloat(newBal) }, match: { id: uid } }); 
+    await adminDbProxy({ table: 'transactions', action: 'insert', payload: { id: `adm_${Date.now()}`, userId: uid, amount: amt, type: type === 'ADD' ? 'DEPOSIT' : 'ADJUSTMENT', status: 'SUCCESS', method: 'ADMIN', utr: reason, date: getISTTime() } }); 
     invalidateCache(['suh_cache_users', 'suh_cache_transactions']); 
     return updatedData![0] as User;
 };
@@ -1290,7 +1310,7 @@ export const revertTransaction = async (txId: string) => {
     const { data: txn } = await supabase.from('transactions').select('*').eq('id', txId).single(); 
     if (!txn || txn.status !== 'SUCCESS') throw new Error("Invalid Txn");
     const { data: u } = await supabase.from('users').select('*').eq('id', txn.userId).single(); 
-    if (txn.type === 'DEPOSIT') await supabase.from('users').update({ balance: safeFloat(u.balance - txn.amount) }).eq('id', txn.userId);
-    await supabase.from('transactions').update({ status: 'REVERTED' }).eq('id', txId);
+    if (txn.type === 'DEPOSIT') await adminDbProxy({ table: 'users', action: 'update', payload: { balance: safeFloat(u.balance - txn.amount) }, match: { id: txn.userId } });
+    await adminDbProxy({ table: 'transactions', action: 'update', payload: { status: 'REVERTED' }, match: { id: txId } });
     invalidateCache(['suh_cache_users', 'suh_cache_transactions']); 
 };
