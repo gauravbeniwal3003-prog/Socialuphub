@@ -1,7 +1,8 @@
+import { supabase } from "../../services/supabase";
 import React, { useState } from 'react';
 import { Card, Button, Input, Notification } from '../ui/Components';
 import { useAuth } from '../../App';
-import { supabase } from '../../services/supabase';
+
 import { 
   Key, Copy, Check, Code, Play, Send, RefreshCw, 
   ExternalLink, HelpCircle, BookOpen, Cpu, ShieldCheck, 
@@ -62,11 +63,14 @@ export const ApiDocsSection: React.FC = () => {
     }
     setIsGenerating(true);
     try {
-      const newKey = crypto.randomUUID().replace(/-/g, '');
-      const { error } = await supabase
-        .from('users')
-        .update({ api_key: newKey })
-        .eq('id', user.id);
+      let newKey = '';
+      const res = await fetch(`${window.location.origin}/api/admin/db-proxy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ table: 'users', action: 'update', payload: { api_key: newKey }, match: { id: user.id } })
+      });
+      const data = await res.json();
+      const error = !res.ok ? { message: data.error } : null;
 
       if (error) {
         throw new Error(error.message || 'Failed to update user key');

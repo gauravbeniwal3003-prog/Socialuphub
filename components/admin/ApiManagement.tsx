@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Card, Button, Input, Badge } from '../ui/Components';
-import { supabase } from '../../services/supabase';
+import { adminDbProxy } from '../../services/mockStore';
 import { useStore, getConfig, updateConfig, fetchOrders, fetchUsers } from '../../services/mockStore';
 import { 
   Code, Key, Percent, Check, Copy, RefreshCw, 
@@ -71,10 +71,7 @@ export const ApiManagement: React.FC<ApiManagementProps> = ({ notify }) => {
 
   const handleUpdateOrderStatus = async (orderId: string, nextStatus: string) => {
     try {
-      const { error } = await supabase
-        .from('orders')
-        .update({ status: nextStatus })
-        .eq('id', orderId);
+      const { error } = await adminDbProxy({ table: 'orders', action: 'update', payload: { status: nextStatus }, match: { id: orderId } });
 
       if (error) throw error;
       notify('API Order status updated successfully!', 'success');

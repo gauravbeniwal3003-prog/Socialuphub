@@ -2222,7 +2222,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/admin/db-proxy", verifyAllowedSource, verifyAdmin, async (req, res) => {
+  app.post("/api/admin/db-proxy", verifyAllowedSource, verifyAdmin, async (req: any, res: any) => {
     try {
       const validation = dbProxySchema.safeParse(req.body);
       if (!validation.success) return res.status(400).json({ error: "Invalid proxy payload" });
@@ -2365,6 +2365,18 @@ async function startServer() {
   });
 
   // Synchronize/Create User Profile safely bypassing RLS
+
+  app.post("/api/users/generate-api-key", verifyAllowedSource, verifyAuth, async (req: any, res: any) => {
+    try {
+      const newKey = crypto.randomUUID().replace(/-/g, '');
+      const { error } = await supabaseAdmin.from('users').update({ api_key: newKey }).eq('id', req.user.id);
+      if (error) throw error;
+      res.json({ success: true, api_key: newKey });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post("/api/sync-user", verifyAllowedSource, verifyAuth, async (req: any, res: any) => {
     const { name, mobile, referredByCode } = req.body;
     const { id, email } = req.user;

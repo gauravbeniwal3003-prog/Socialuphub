@@ -1,0 +1,6 @@
+async function fetchFresh<T>(tableName: string, cacheKey: string, orderByField: string = 'createdAt', limitCount: number = 100): Promise<T[]> {
+    try {
+        // Removed supabase.from from fetchFresh
+        if (orderByField) query = query.order(orderByField, { ascending: false });
+        if (tableName !== 'categories' && tableName !== 'services' && tableName !== 'coupons') query = query.limit(limitCount);
+

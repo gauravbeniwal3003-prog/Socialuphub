@@ -109,12 +109,8 @@ const cleanSmmText = (text: string | null | undefined): string => {
 // --- DATA RETENTION & CLEANUP HELPER ---
 const cleanupUserHistory = async (table: string, userId: string, dateField: string, limit: number) => {
     try {
-        const { data: itemsToRemove } = await supabase
-            .from(table)
-            .select('id')
-            .eq('userId', userId)
-            .order(dateField, { ascending: false })
-            .range(limit, 1000); 
+        const data = await dbReadProxy(table, { userId }, { order: `${dateField}.desc`, limit: 1000 });
+        const itemsToRemove = data ? data.slice(limit) : []; 
         
         if (itemsToRemove && itemsToRemove.length > 0) {
             const ids = itemsToRemove.map(i => i.id);
@@ -212,12 +208,11 @@ function invalidateCache(keys: string[]) {
 // --- NEW FRESH FETCH ---
 async function fetchFresh<T>(tableName: string, cacheKey: string, orderByField: string = 'createdAt', limitCount: number = 100): Promise<T[]> {
     try {
-        // Removed supabase.from from fetchFresh
-        if (orderByField) query = query.order(orderByField, { ascending: false });
-        if (tableName !== 'categories' && tableName !== 'services' && tableName !== 'coupons') query = query.limit(limitCount);
-
-        const { data, error } = await query;
-        if (error) throw error;
+        const options: any = { order: `${orderByField}.desc` };
+        if (tableName !== 'categories' && tableName !== 'services' && tableName !== 'coupons') {
+            options.limit = limitCount;
+        }
+        const data = await dbReadProxy(tableName, {}, options);
         
         saveToCache(cacheKey, data);
         return data as unknown as T[];
@@ -361,12 +356,7 @@ export const getReferralStats = async (userId: string) => {
         const depUsers = await dbReadProxy('users', { referred_by: userId, totalSpent: { gt: 0 } }); const depositCount = depUsers.length;
 
         // Get list of referred users for the table - LIMIT TO LAST 5 ONLY
-        const { data: referredUsers } = await supabase
-            .from('users')
-            .select('id, name, created_at')
-            .eq('referred_by', userId)
-            .order('created_at', { ascending: false })
-            .limit(5);
+        const referredUsers = await dbReadProxy('users', { referred_by: userId }, { order: 'created_at.desc', limit: 5 });
 
         return {
             totalReferrals: totalReferrals || 0,
@@ -449,7 +439,12 @@ export async function dbReadProxy(table: string, match?: any, options?: any) {
         },
         body: JSON.stringify({ table, match, ...options })
     });
-    const result = await res.json();
+    let result;
+    try {
+        result = await res.json();
+    } catch (e) {
+        throw new Error(`DB Read Proxy Parse Error: HTTP ${res.status} - ${res.statusText}`);
+    }
     if (!res.ok || result.error) throw new Error(result.error || "DB Read Proxy Error");
     return result.data || [];
 };
@@ -468,7 +463,12 @@ export async function adminDbProxy(payload: any) {
         },
         body: JSON.stringify(payload)
         });
-    const result = await res.json();
+    let result;
+    try {
+        result = await res.json();
+    } catch (e) {
+        throw new Error(`DB Proxy Parse Error: HTTP ${res.status} - ${res.statusText}`);
+    }
     if (!res.ok || result.error) throw new Error(result.error || "DB Proxy Error");
     return result;
 };
@@ -849,7 +849,7 @@ export const syncServicesFromProvider = async () => {
 
             if (newCats.length > 0) {
                 for (let c of newCats) await adminDbProxy({ table: 'categories', action: 'upsert', payload: c, match: { name: c.name } });
-                if(catError) console.error("Category Insert Error:", catError);
+                
             }
 
             // 2. Services
@@ -905,12 +905,12 @@ export const syncPricesFromProvider = async () => {
         }
         
         if (servicesToUpdate.length > 0) {
-            for (let s of servicesToUpdate) await adminDbProxy({ table: 'services', action: 'upsert', payload: s, match: { service: s.service } });
-            if (updateError) {
-                console.error("[Price Sync] Failed to update prices:", updateError);
-            } else {
+            try {
+                for (let s of servicesToUpdate) await adminDbProxy({ table: 'services', action: 'upsert', payload: s, match: { service: s.service } });
                 console.log(`[Price Sync] Updated ${servicesToUpdate.length} service prices.`);
                 invalidateCache(['suh_cache_services']);
+            } catch (updateError) {
+                console.error("[Price Sync] Failed to update prices:", updateError);
             }
         }
     } catch (e) {
@@ -1116,13 +1116,8 @@ export const getEmailByMobile = async (m: string) => {
     } catch (e) {
         console.warn("getEmailByMobile server lookup failed, attempting direct Supabase query fallback:", e);
         try {
-            const { data, error } = await supabase
-                .from('users')
-                .select('email')
-                .eq('mobile', m)
-                .maybeSingle();
-            if (error) throw error;
-            return data?.email || null;
+            const data = await dbReadProxy('users', { mobile: m });
+            return data?.[0]?.email || null;
         } catch (fallbackError) {
             console.error("Client-side fallback lookup failed:", fallbackError);
             return null;
