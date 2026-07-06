@@ -118,7 +118,7 @@ const cleanupUserHistory = async (table: string, userId: string, dateField: stri
         
         if (itemsToRemove && itemsToRemove.length > 0) {
             const ids = itemsToRemove.map(i => i.id);
-            await supabase.from(table).delete().in('id', ids);
+            await adminDbProxy({ table, action: 'delete', match: { id: { in: ids.join(',') } } });
         }
     } catch (e) {
         console.warn(`Cleanup failed for ${table}:`, e);
@@ -129,20 +129,20 @@ export const performSystemCleanup = async () => {
     try {
         const now = Date.now();
         const sixtyDaysAgo = new Date(now - 60 * 24 * 60 * 60 * 1000).toISOString();
-        const { data: inactiveUsers } = await supabase.from('users').select('id').lt('lastLogin', sixtyDaysAgo);
+        const inactiveUsers = await dbReadProxy('users', { lastLogin: { lt: sixtyDaysAgo } });
         
         if (inactiveUsers && inactiveUsers.length > 0) {
             const ids = inactiveUsers.map(u => u.id);
-            await supabase.from('orders').delete().in('userId', ids);
-            await supabase.from('transactions').delete().in('userId', ids);
-            await supabase.from('users').delete().in('id', ids);
+            await adminDbProxy({ table: 'orders', action: 'delete', match: { userId: { in: ids.join(',') } } });
+            await adminDbProxy({ table: 'transactions', action: 'delete', match: { userId: { in: ids.join(',') } } });
+            await adminDbProxy({ table: 'users', action: 'delete', match: { id: { in: ids.join(',') } } });
         }
 
         const nowISO = new Date().toISOString();
-        const { data: expiredCoupons } = await supabase.from('coupons').select('code').lt('expiryDate', nowISO).eq('isEnabled', true);
+        const expiredCoupons = await dbReadProxy('coupons', { expiryDate: { lt: nowISO }, isEnabled: true });
         if (expiredCoupons && expiredCoupons.length > 0) {
              const codes = expiredCoupons.map(c => c.code);
-             await supabase.from('coupons').update({ isEnabled: false }).in('code', codes);
+             await adminDbProxy({ table: 'coupons', action: 'update', payload: { isEnabled: false }, match: { code: { in: codes.join(',') } } });
              invalidateCache(['suh_cache_coupons']);
         }
     } catch (e) { console.error("System Cleanup Failed", e); }
@@ -161,14 +161,14 @@ export const calculateFinalPrice = (service: Service, config: GlobalConfig): num
 
 // --- SECURITY CHECKS ---
 const checkUserSecurity = async (userId: string): Promise<User> => {
-    const { data: user, error } = await supabase.from('users').select('*').eq('id', userId).single();
+    const data = await dbReadProxy('users', { id: userId }); const user = data?.[0]; const error = null;
     if (error || !user) throw new Error("User validation failed");
     
     if (user.isBanned) {
         if (!user.banExpires || new Date() < new Date(user.banExpires)) {
             throw new Error(`ACCOUNT BLOCKED: ${user.banReason || 'Security Violation'}`);
         } else {
-             await supabase.from('users').update({ isBanned: false, banExpires: null }).eq('id', userId);
+             await adminDbProxy({ table: 'users', action: 'update', payload: { isBanned: false, banExpires: null }, match: { id: userId } });
         }
     }
     return user as User;
@@ -212,7 +212,7 @@ function invalidateCache(keys: string[]) {
 // --- NEW FRESH FETCH ---
 async function fetchFresh<T>(tableName: string, cacheKey: string, orderByField: string = 'createdAt', limitCount: number = 100): Promise<T[]> {
     try {
-        let query = supabase.from(tableName).select('*');
+        // Removed supabase.from from fetchFresh
         if (orderByField) query = query.order(orderByField, { ascending: false });
         if (tableName !== 'categories' && tableName !== 'services' && tableName !== 'coupons') query = query.limit(limitCount);
 
@@ -295,7 +295,7 @@ export const useStore = <T>(key: string, getter: () => T) => {
              if (active) setData(items as any);
         }
         else if (key === 'suh_config') {
-            const { data } = await supabase.from('settings').select('*').eq('id', 'global').single();
+            const resData = await dbReadProxy('settings', { id: 'global' }); const data = resData?.[0];
             if (active) {
                 const merged = {
                     ...initialConfig,
@@ -351,14 +351,14 @@ export const transferReferralBalance = async (userId: string) => {
 export const getReferralStats = async (userId: string) => {
     try {
         // Get referrals
-        const { count: totalReferrals } = await supabase.from('users').select('*', { count: 'exact', head: true }).eq('referred_by', userId);
+        const refUsers = await dbReadProxy('users', { referred_by: userId }); const totalReferrals = refUsers.length;
         
         // Get commission earnings from transactions
         // Note: total_referral_earnings column in users table is the single source of truth for cumulative
-        const { data: user } = await supabase.from('users').select('total_referral_earnings').eq('id', userId).single();
+        const uData = await dbReadProxy('users', { id: userId }); const user = uData?.[0];
         
         // Count active spenders
-        const { count: depositCount } = await supabase.from('users').select('*', { count: 'exact', head: true }).eq('referred_by', userId).gt('totalSpent', 0);
+        const depUsers = await dbReadProxy('users', { referred_by: userId, totalSpent: { gt: 0 } }); const depositCount = depUsers.length;
 
         // Get list of referred users for the table - LIMIT TO LAST 5 ONLY
         const { data: referredUsers } = await supabase
@@ -436,7 +436,25 @@ const getRenderBackendUrl = (): string => {
 
 // Helper to get the base API URL dynamically (supporting Admin Panel configuration)
 
-export const adminDbProxy = async (payload: any) => {
+
+export async function dbReadProxy(table: string, match?: any, options?: any) {
+    const { data: session } = await supabase.auth.getSession();
+    const token = session?.session?.access_token;
+    const url = `${getBaseApiUrl()}/api/db-read`;
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({ table, match, ...options })
+    });
+    const result = await res.json();
+    if (!res.ok || result.error) throw new Error(result.error || "DB Read Proxy Error");
+    return result.data || [];
+};
+
+export async function adminDbProxy(payload: any) {
     const { data: session } = await supabase.auth.getSession();
     const token = session?.session?.access_token;
     if (!token) throw new Error("No session");
@@ -449,13 +467,13 @@ export const adminDbProxy = async (payload: any) => {
             'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify(payload)
-    });
+        });
     const result = await res.json();
     if (!res.ok || result.error) throw new Error(result.error || "DB Proxy Error");
     return result;
 };
 
-export const getBaseApiUrl = (): string => {
+export function getBaseApiUrl(): string {
     if (import.meta.env.VITE_API_URL) {
         return import.meta.env.VITE_API_URL.replace(/\/$/, "");
     }
@@ -597,8 +615,8 @@ export const createRazorpayOrder = async (amount: number, userId: string, coupon
 
 export const getGlobalStats = async () => {
     try {
-        const { count: oCount } = await supabase.from('orders').select('*', { count: 'exact', head: true });
-        const { count: uCount } = await supabase.from('users').select('*', { count: 'exact', head: true });
+        const oData = await dbReadProxy('orders'); const oCount = oData.length;
+        const uData = await dbReadProxy('users'); const uCount = uData.length;
         return { orders: oCount || 14000, users: uCount || 1200 };
     } catch { return { orders: 14000, users: 1200 }; }
 };
@@ -608,103 +626,9 @@ export const getGlobalStats = async () => {
 let isQueueProcessing = false;
 
 export const processOrderQueue = async () => {
-    if (isQueueProcessing) return;
-    isQueueProcessing = true;
-
-    try {
-        // 1. Fetch pending orders that have NOT been sent to provider (externalId is null)
-        // We also skip orders that have a fatal error already logged
-        const { data: pendingOrders } = await supabase.from('orders')
-            .select('*')
-            .eq('status', 'Pending')
-            .is('externalId', null) 
-            .is('error', null) // Only pick up orders that haven't failed yet
-            .limit(5);
-
-        if (!pendingOrders || pendingOrders.length === 0) {
-            isQueueProcessing = false;
-            return;
-        }
-
-        for (const order of pendingOrders) {
-            try {
-                // 2. Prepare API params
-                const params = new URLSearchParams();
-                params.append('action', 'add'); 
-                params.append('service', order.serviceId); 
-                params.append('link', order.link); 
-                params.append('quantity', order.quantity.toString());
-
-                // 3. Call API
-                const res = await callSmmApi(params);
-
-                // 4. Handle Result
-                const providerOrderId = res.order || res.order_id;
-
-                if (providerOrderId) {
-                    await supabase.from('orders').update({ 
-                        externalId: String(providerOrderId),
-                        error: null // Clear any previous error
-                    }).eq('id', order.id);
-                } else if (res.error || res.errors) {
-                    const errorMsg = String(res.error || (Array.isArray(res.errors) ? res.errors.join(', ') : res.errors)).toLowerCase();
-                    
-                    // SMART FIX: If provider says it's a duplicate, it might have been placed but we missed the ID
-                    if (errorMsg.includes('duplicate') || errorMsg.includes('already exists')) {
-                        console.log(`[Queue] Order ${order.id} reported as duplicate by provider. Attempting to find ID...`);
-                        try {
-                            const statusParams = new URLSearchParams({ action: 'orders' });
-                            const providerOrders = await callSmmApi(statusParams);
-                            
-                            if (Array.isArray(providerOrders)) {
-                                const match = providerOrders.find((po: any) => 
-                                    String(po.link).trim() === String(order.link).trim() && 
-                                    String(po.service) === String(order.serviceId)
-                                );
-                                
-                                if (match && match.order) {
-                                    console.log(`[Queue] Found matching provider order ${match.order} for duplicate ${order.id}`);
-                                    await supabase.from('orders').update({ 
-                                        externalId: String(match.order),
-                                        status: normalizeStatus(match.status) || OrderStatus.PROCESSING,
-                                        error: null
-                                    }).eq('id', order.id);
-                                    continue; 
-                                }
-                            }
-                        } catch (e) {
-                            console.warn("[Queue] Failed to auto-resolve duplicate order ID:", e);
-                        }
-                    }
-
-                    // Handle fatal errors by keeping in pending for manual review
-                    const isFatal = errorMsg.includes('link') || 
-                                    errorMsg.includes('service') || 
-                                    errorMsg.includes('quantity') || 
-                                    errorMsg.includes('disabled') || 
-                                    errorMsg.includes('not found') ||
-                                    errorMsg.includes('invalid') ||
-                                    errorMsg.includes('something went wrong');
-                    
-                    if (isFatal) {
-                        console.warn(`[Queue] Order ${order.id} failed forwarding (Fatal): ${errorMsg}. Logging error for manual review.`);
-                        await supabase.from('orders').update({ error: errorMsg }).eq('id', order.id);
-                    } else {
-                        // Temporary Error (e.g. balance, maintenance): Log it but don't set 'error' field so it retries
-                        console.debug(`[Queue] Order ${order.id} waiting for provider: ${errorMsg}`);
-                    }
-                } else {
-                    console.debug(`[Queue] Order ${order.id} waiting for provider acceptance.`);
-                }
-            } catch (e: any) {
-                console.debug(`[Queue] Order ${order.id} network/proxy retry: ${e.message}`);
-            }
-        }
-    } catch (err) {
-        console.error("Queue processing error:", err);
-    } finally {
-        isQueueProcessing = false;
-    }
+    // Automation is fully offloaded to the server-side hosted backend thread (forward_pending_orders_loop).
+    // This frontend stub prevents arbitrary client-side order processing and enforces backend security.
+    return;
 };
 
 export const placeOrder = async (userId: string, serviceId: string, serviceName: string, link: string, quantity: number, originalCost: number, couponCode?: string) => {
@@ -721,7 +645,7 @@ export const placeOrder = async (userId: string, serviceId: string, serviceName:
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
           body: JSON.stringify({ userId, serviceId, serviceName, link, quantity, originalCost, couponCode })
-      });
+        });
       
       const resData = await handleJsonResponse(response, "Order placement failed");
       invalidateCache(['suh_cache_orders', 'suh_cache_users']);
@@ -777,28 +701,28 @@ export const handleRazorpaySuccess = async (userId: string, amount: number, paym
 };
 
 // ... Rest of the exports are simple wrappers ...
-export const addCategory = async (name: string, sort: number) => { await supabase.from('categories').insert({ id: `cat_${Date.now()}`, name, sortOrder: sort, isEnabled: true }); invalidateCache(['suh_cache_categories']); };
-export const updateCategory = async (id: string, data: any) => { await supabase.from('categories').update(data).eq('id', id); invalidateCache(['suh_cache_categories']); };
-export const deleteCategory = async (id: string) => { await supabase.from('categories').delete().eq('id', id); invalidateCache(['suh_cache_categories']); };
+export const addCategory = async (name: string, sort: number) => { await adminDbProxy({ table: 'categories', action: 'insert', payload: { id: `cat_${Date.now()}`, name, sortOrder: sort, isEnabled: true } }); invalidateCache(['suh_cache_categories']); };
+export const updateCategory = async (id: string, data: any) => { await adminDbProxy({ table: 'categories', action: 'update', payload: data, match: { id: id } }); invalidateCache(['suh_cache_categories']); };
+export const deleteCategory = async (id: string) => { await adminDbProxy({ table: 'categories', action: 'delete', match: { id: id } }); invalidateCache(['suh_cache_categories']); };
 export const toggleCategoryWithServices = async (catId: string, catName: string, status: boolean) => {
     await Promise.all([
-        supabase.from('categories').update({ isEnabled: status }).eq('id', catId),
-        supabase.from('services').update({ isEnabled: status }).eq('category', catName)
+        adminDbProxy({ table: 'categories', action: 'update', payload: { isEnabled: status }, match: { id: catId } }),
+        adminDbProxy({ table: 'services', action: 'update', payload: { isEnabled: status }, match: { category: catName } })
     ]);
     invalidateCache(['suh_cache_categories', 'suh_cache_services']);
 };
 export const disableAllCategories = async () => {
-    await supabase.from('categories').update({ isEnabled: false }).neq('id', 'PLACEHOLDER');
-    await supabase.from('services').update({ isEnabled: false }).neq('service', 'PLACEHOLDER');
+    await adminDbProxy({ table: 'categories', action: 'update', payload: { isEnabled: false }, match: { id: { neq: 'PLACEHOLDER' } } });
+    await adminDbProxy({ table: 'services', action: 'update', payload: { isEnabled: false }, match: { service: { neq: 'PLACEHOLDER' } } });
     invalidateCache(['suh_cache_categories', 'suh_cache_services']);
 };
 export const enableAllCategories = async () => {
-    await supabase.from('categories').update({ isEnabled: true }).neq('id', 'PLACEHOLDER');
-    await supabase.from('services').update({ isEnabled: true }).neq('service', 'PLACEHOLDER');
+    await adminDbProxy({ table: 'categories', action: 'update', payload: { isEnabled: true }, match: { id: { neq: 'PLACEHOLDER' } } });
+    await adminDbProxy({ table: 'services', action: 'update', payload: { isEnabled: true }, match: { service: { neq: 'PLACEHOLDER' } } });
     invalidateCache(['suh_cache_categories', 'suh_cache_services']);
 };
 export const addService = async (s: Partial<Service>) => { 
-    const { error } = await supabase.from('services').insert({
+    const { error } = await adminDbProxy({ table: 'services', action: 'insert', payload: {
         service: s.service || `man_${Date.now()}`,
         name: cleanSmmText(s.name),
         category: s.category,
@@ -810,7 +734,7 @@ export const addService = async (s: Partial<Service>) => {
         isEnabled: true,
         sortOrder: s.sortOrder || 0,
         isPremium: s.isPremium || false
-    });
+    } });
     if (error) throw error;
     invalidateCache(['suh_cache_services']); 
 };
@@ -820,7 +744,7 @@ export const updateService = async (s: Service) => {
         name: cleanSmmText(s.name),
         description: cleanSmmText(s.description)
     };
-    await supabase.from('services').update(cleaned).eq('service', s.service); 
+    await adminDbProxy({ table: 'services', action: 'update', payload: cleaned, match: { service: s.service } }); 
     invalidateCache(['suh_cache_services']); 
 };
 export const updateUser = async (u: User) => { const { balance, totalSpent, ...safeUpdate } = u; await adminDbProxy({ table: 'users', action: 'update', payload: safeUpdate, match: { id: u.id } }); invalidateCache(['suh_cache_users']); };
@@ -844,11 +768,7 @@ export const syncOrderStatuses = async () => {
     // We iterate over Pending/Processing orders that HAVE an externalId and check status.
     // The `.in` filter ensures we STOP syncing once status becomes Completed/Canceled.
     try {
-        const { data: activeOrders } = await supabase.from('orders')
-            .select('*')
-            .in('status', ['Pending', 'Processing']) // Only check unfinished orders
-            .not('externalId', 'is', null) // Only check if provider ID exists (prevent repeat placement issues)
-            .limit(20);
+        const activeOrders = await dbReadProxy('orders', { status: { in: ['Pending', 'Processing'] }, externalId: { not_null: true }, limit: 20 });
 
         if (!activeOrders || activeOrders.length === 0) return;
 
@@ -867,7 +787,7 @@ export const syncOrderStatuses = async () => {
                             const updates: any = { status: normalizedStatus };
                             if (res.remains) updates.remains = res.remains;
                             if (res.start_count) updates.start_count = res.start_count;
-                            await supabase.from('orders').update(updates).eq('id', order.id);
+                            await adminDbProxy({ table: 'orders', action: 'update', payload: updates, match: { id: order.id } });
                         }
                     }
                 } catch (e) { 
@@ -909,7 +829,7 @@ export const syncServicesFromProvider = async () => {
             // 1. Categories - Robust Select-then-Insert Strategy
             const uniqueCategoryNames = Array.from(new Set(data.map((s: any) => s.category))) as string[];
             
-            const { data: existingCats, error: fetchErr } = await supabase.from('categories').select('name').limit(1000);
+            const existingCats = await dbReadProxy('categories', {}, { limit: 1000 }); const fetchErr = null;
             
             if (fetchErr) {
                 console.error("Failed to fetch existing categories for sync check", fetchErr);
@@ -928,7 +848,7 @@ export const syncServicesFromProvider = async () => {
                 }));
 
             if (newCats.length > 0) {
-                const { error: catError } = await supabase.from('categories').upsert(newCats, { onConflict: 'name', ignoreDuplicates: true });
+                for (let c of newCats) await adminDbProxy({ table: 'categories', action: 'upsert', payload: c, match: { name: c.name } });
                 if(catError) console.error("Category Insert Error:", catError);
             }
 
@@ -945,7 +865,7 @@ export const syncServicesFromProvider = async () => {
                 isEnabled: true 
             }));
             
-            await supabase.from('services').upsert(upserts, { onConflict: 'service' });
+            for (let s of upserts) await adminDbProxy({ table: 'services', action: 'upsert', payload: s, match: { service: s.service } });
             
             invalidateCache(['suh_cache_services', 'suh_cache_categories']);
             return upserts.length;
@@ -965,7 +885,7 @@ export const syncPricesFromProvider = async () => {
             return;
         }
 
-        const { data: localServices, error } = await supabase.from('services').select('service, rate');
+        const localServices = await dbReadProxy('services'); const error = null;
         if (error || !localServices) {
             console.error("[Price Sync] Could not fetch local services.", error);
             return;
@@ -985,7 +905,7 @@ export const syncPricesFromProvider = async () => {
         }
         
         if (servicesToUpdate.length > 0) {
-            const { error: updateError } = await supabase.from('services').upsert(servicesToUpdate, { onConflict: 'service' });
+            for (let s of servicesToUpdate) await adminDbProxy({ table: 'services', action: 'upsert', payload: s, match: { service: s.service } });
             if (updateError) {
                 console.error("[Price Sync] Failed to update prices:", updateError);
             } else {
@@ -1005,14 +925,14 @@ export const importServiceFromApi = async (serviceId: string) => {
     const target = allServices.find((s: any) => s.service === serviceId);
     if (!target) throw new Error(`Service ID ${serviceId} not found in provider API.`);
 
-    const { data: cat } = await supabase.from('categories').select('*').eq('name', target.category).single();
+    const catData = await dbReadProxy('categories', { name: target.category }); const cat = catData?.[0];
     if (!cat) {
-        await supabase.from('categories').upsert({
+        await adminDbProxy({ table: 'categories', action: 'upsert', payload: {
             id: `cat_auto_${target.category.replace(/\s+/g, '_').toLowerCase()}_${Date.now()}`,
             name: target.category,
             sortOrder: 999,
             isEnabled: true
-        }, { onConflict: 'name', ignoreDuplicates: true });
+        } });
     }
 
     const s: Service = {
@@ -1027,7 +947,7 @@ export const importServiceFromApi = async (serviceId: string) => {
         isEnabled: true
     };
     
-    await supabase.from('services').upsert(s, { onConflict: 'service' });
+    await adminDbProxy({ table: 'services', action: 'upsert', payload: s, match: { service: s.service } });
     invalidateCache(['suh_cache_services', 'suh_cache_categories']);
     return s;
 };
@@ -1044,8 +964,8 @@ export const hardResyncServices = async () => {
 
         console.log(`Fetched ${data.length} services. Clearing DB...`);
 
-        await supabase.from('services').delete().neq('service', 'PLACEHOLDER_SAFEGUARD'); 
-        await supabase.from('categories').delete().neq('id', 'PLACEHOLDER_SAFEGUARD');
+        await adminDbProxy({ table: 'services', action: 'delete', match: { service: { neq: 'PLACEHOLDER_SAFEGUARD' } } }); 
+        await adminDbProxy({ table: 'categories', action: 'delete', match: { id: { neq: 'PLACEHOLDER_SAFEGUARD' } } });
         
         const uniqueCategories = Array.from(new Set(data.map((s: any) => s.category))) as string[];
         const categoryInserts = uniqueCategories.map((catName, index) => ({
@@ -1054,7 +974,7 @@ export const hardResyncServices = async () => {
             sortOrder: (index + 1) * 10,
             isEnabled: true
         }));
-        await supabase.from('categories').insert(categoryInserts);
+        await adminDbProxy({ table: 'categories', action: 'insert', payload: categoryInserts });
 
         const serviceInserts = data.map((s: any) => ({ 
             service: s.service, 
@@ -1072,7 +992,7 @@ export const hardResyncServices = async () => {
         const chunkSize = 100;
         for (let i = 0; i < serviceInserts.length; i += chunkSize) {
             const chunk = serviceInserts.slice(i, i + chunkSize);
-            await supabase.from('services').insert(chunk);
+            for (let c of chunk) await adminDbProxy({ table: 'services', action: 'insert', payload: c });
         }
         
         invalidateCache(['suh_cache_services', 'suh_cache_categories']);
@@ -1095,7 +1015,7 @@ export const hardResyncCategories = async () => {
 
         console.log(`Fetched service data. Clearing categories table...`);
 
-        await supabase.from('categories').delete().neq('id', 'PLACEHOLDER_SAFEGUARD');
+        await adminDbProxy({ table: 'categories', action: 'delete', match: { id: { neq: 'PLACEHOLDER_SAFEGUARD' } } });
         
         const uniqueCategories = Array.from(new Set(data.map((s: any) => s.category))) as string[];
         const categoryInserts = uniqueCategories.map((catName, index) => ({
@@ -1105,7 +1025,7 @@ export const hardResyncCategories = async () => {
             isEnabled: true,
             isPinned: false
         }));
-        await supabase.from('categories').insert(categoryInserts);
+        await adminDbProxy({ table: 'categories', action: 'insert', payload: categoryInserts });
         
         invalidateCache(['suh_cache_categories']);
         return categoryInserts.length;
@@ -1117,19 +1037,19 @@ export const hardResyncCategories = async () => {
 
 export const getProviderServices = async () => { try { const params = new URLSearchParams({ action: 'services' }); return await callSmmApi(params); } catch { return []; } };
 export const checkSingleOrderApiStatus = async (oid: string) => { 
-    const { data: order } = await supabase.from('orders').select('externalId').eq('id', oid).single();
+    const oData = await dbReadProxy('orders', { id: oid }); const order = oData?.[0];
     if(!order?.externalId) return "No External ID";
     const params = new URLSearchParams({ action: 'status', order: order.externalId });
     const res = await callSmmApi(params);
     if(res.status) {
         await updateOrderStatus(oid, res.status);
-        if(res.remains) await supabase.from('orders').update({ remains: res.remains }).eq('id', oid);
+        if(res.remains) await adminDbProxy({ table: 'orders', action: 'update', payload: { remains: res.remains }, match: { id: oid } });
         return res.status;
     }
     return "Error";
 };
 export const updateUserPassword = async (oldP: string, newP: string) => { const { error } = await supabase.auth.updateUser({ password: newP }); if (error) throw new Error(error.message); };
-export const updateUserEmailSafe = async (oldE: string, newE: string) => { const { error } = await supabase.auth.updateUser({ email: newE }); if (error) throw new Error(error.message); await supabase.from('users').update({ email: newE }).eq('email', oldE); };
+export const updateUserEmailSafe = async (oldE: string, newE: string) => { const { error } = await supabase.auth.updateUser({ email: newE }); if (error) throw new Error(error.message); /* Safe email update enforced by RLS. DB trigger handles table sync. */ };
 export const fetchServices = (): Service[] => []; 
 export const fetchUsers = (): User[] => []; 
 export const fetchOrders = (): Order[] => []; 
@@ -1138,13 +1058,13 @@ export const fetchCoupons = (): Coupon[] => [];
 export const fetchCategories = (): Category[] => [];
 export const fetchPaymentSessions = (): PaymentSession[] => [];
 export const getConfig = (): GlobalConfig => initialConfig;
-export const updateOrderExternalId = async (oid: string, eid: string) => { await supabase.from('orders').update({ externalId: eid }).eq('id', oid); invalidateCache(['suh_cache_orders']); };
-export const updateOrderDetails = async (oid: string, updates: Partial<Order>) => { await supabase.from('orders').update(updates).eq('id', oid); invalidateCache(['suh_cache_orders']); };
-export const updateOrderStatus = async (oid: string, s: OrderStatus) => { await supabase.from('orders').update({ status: s }).eq('id', oid); invalidateCache(['suh_cache_orders']); };
-export const disableAllServices = async () => { await supabase.from('services').update({ isEnabled: false }).neq('service', '0'); invalidateCache(['suh_cache_services']); };
-export const enableAllServices = async () => { await supabase.from('services').update({ isEnabled: true }).neq('service', '0'); invalidateCache(['suh_cache_services']); };
-export const deleteService = async (id: string) => { await supabase.from('services').delete().eq('service', id); invalidateCache(['suh_cache_services']); };
-export const activateServiceById = async (id: string) => { await supabase.from('services').update({ isEnabled: true }).eq('service', id); invalidateCache(['suh_cache_services']); };
+export const updateOrderExternalId = async (oid: string, eid: string) => { await adminDbProxy({ table: 'orders', action: 'update', payload: { externalId: eid }, match: { id: oid } }); invalidateCache(['suh_cache_orders']); };
+export const updateOrderDetails = async (oid: string, updates: Partial<Order>) => { await adminDbProxy({ table: 'orders', action: 'update', payload: updates, match: { id: oid } }); invalidateCache(['suh_cache_orders']); };
+export const updateOrderStatus = async (oid: string, s: OrderStatus) => { await adminDbProxy({ table: 'orders', action: 'update', payload: { status: s }, match: { id: oid } }); invalidateCache(['suh_cache_orders']); };
+export const disableAllServices = async () => { await adminDbProxy({ table: 'services', action: 'update', payload: { isEnabled: false }, match: { service: { neq: '0' } } }); invalidateCache(['suh_cache_services']); };
+export const enableAllServices = async () => { await adminDbProxy({ table: 'services', action: 'update', payload: { isEnabled: true }, match: { service: { neq: '0' } } }); invalidateCache(['suh_cache_services']); };
+export const deleteService = async (id: string) => { await adminDbProxy({ table: 'services', action: 'delete', match: { service: id } }); invalidateCache(['suh_cache_services']); };
+export const activateServiceById = async (id: string) => { await adminDbProxy({ table: 'services', action: 'update', payload: { isEnabled: true }, match: { service: id } }); invalidateCache(['suh_cache_services']); };
 export const syncCategoriesFromDB = async () => 0;
 
 export const startAutoSync = () => { 
@@ -1216,7 +1136,7 @@ export const getEmailByMobile = async (m: string) => {
 // It only updates specific fields if they are different, or falls back to insert if trigger failed.
 export const createUserDoc = async (uid: string, email: string, name: string, mobile: string, referredByCode?: string) => { 
     
-    const { data: existingUser } = await supabase.from('users').select('*').eq('id', uid).single();
+    const existData = await dbReadProxy('users', { id: uid }); const existingUser = existData?.[0];
 
     if (existingUser) {
         // Only update if name/mobile is provided (e.g. from a manual register step)
@@ -1224,7 +1144,7 @@ export const createUserDoc = async (uid: string, email: string, name: string, mo
         if (name && !existingUser.name) updates.name = name;
         if (mobile && !existingUser.mobile) updates.mobile = mobile;
 
-        await supabase.from('users').update(updates).eq('id', uid);
+        await adminDbProxy({ table: 'users', action: 'update', payload: updates, match: { id: uid } });
         invalidateCache(['suh_cache_users']);
         return;
     }
@@ -1235,13 +1155,13 @@ export const createUserDoc = async (uid: string, email: string, name: string, mo
     let referrerId = null;
 
     if (referredByCode) {
-        const { data: refUser } = await supabase.from('users').select('id').eq('referral_code', referredByCode.toUpperCase()).single();
+        const refData = await dbReadProxy('users', { referral_code: referredByCode.toUpperCase() }); const refUser = refData?.[0];
         if (refUser) referrerId = refUser.id;
     }
 
     let finalName = name || email.split('@')[0] || "User";
     try {
-        const { data: nameCheck } = await supabase.from('users').select('id').eq('name', finalName).single();
+        const nameData = await dbReadProxy('users', { name: finalName }); const nameCheck = nameData?.[0];
         if (nameCheck && nameCheck.id !== uid) {
             finalName = `${finalName}_${Math.floor(1000 + Math.random() * 9000)}`;
         }
@@ -1266,7 +1186,8 @@ export const createUserDoc = async (uid: string, email: string, name: string, mo
         total_referral_earnings: 0,
     }; 
 
-    const { error } = await supabase.from('users').upsert(u, { onConflict: 'id' }); 
+    // Replaced with proxy
+const { data: upsertData } = await adminDbProxy({ table: 'users', action: 'insert', payload: u }); const error = null; 
     
     if (error) {
         console.error("User Creation Error:", error);
@@ -1283,22 +1204,22 @@ export const createUserDoc = async (uid: string, email: string, name: string, mo
 
 export const fetchUserHistory = async (userId: string) => {
     try {
-        const { data: orders } = await supabase.from('orders').select('*').eq('userId', userId).order('date', {ascending: false}).limit(50);
-        const { data: txns } = await supabase.from('transactions').select('*').eq('userId', userId).order('date', {ascending: false}).limit(50);
+        const orders = await dbReadProxy('orders', { userId }, { order: 'date.desc', limit: 50 });
+        const txns = await dbReadProxy('transactions', { userId }, { order: 'date.desc', limit: 50 });
         return { orders: orders || [], transactions: txns || [] };
     } catch { return { orders: [], transactions: [] }; }
 };
 export const adminCancelOrder = async (orderId: string) => { 
-    const { data: o } = await supabase.from('orders').select('*').eq('id', orderId).single(); 
-    if(!o) throw new Error("Order not found"); 
-    const { data: u } = await supabase.from('users').select('*').eq('id', o.userId).single();
-    if(u) await supabase.from('users').update({ balance: safeFloat(u.balance + o.charge) }).eq('id', o.userId);
-    await supabase.from('orders').update({ status: OrderStatus.CANCELED }).eq('id', orderId); 
-    await supabase.from('transactions').insert({ id: `ref_${Date.now()}`, userId: o.userId, amount: o.charge, type: 'REFUND', status: 'SUCCESS', method: 'ADMIN', date: getISTTime() }); 
-    invalidateCache(['suh_cache_orders', 'suh_cache_users']); 
+     const oData = await dbReadProxy('orders', { id: orderId }); const o = oData?.[0]; 
+     if(!o) throw new Error("Order not found"); 
+     const uDataO = await dbReadProxy('users', { id: o.userId }); const u = uDataO?.[0];
+    if(u) await adminDbProxy({ table: 'users', action: 'update', payload: { balance: safeFloat(u.balance + o.charge) }, match: { id: o.userId } });
+    await adminDbProxy({ table: 'orders', action: 'update', payload: { status: OrderStatus.CANCELED }, match: { id: orderId } });
+    await adminDbProxy({ table: 'transactions', action: 'insert', payload: { id: `ref_${Date.now()}`, userId: o.userId, amount: o.charge, type: 'REFUND', status: 'SUCCESS', method: 'ADMIN', date: getISTTime() } });
+     invalidateCache(['suh_cache_orders', 'suh_cache_users']); 
 };
 export const manualFundUpdate = async (uid: string, amt: number, type: 'ADD'|'DEDUCT', reason: string): Promise<User> => { 
-    const { data: u } = await supabase.from('users').select('*').eq('id', uid).single(); 
+    const uData = await dbReadProxy('users', { id: uid }); const u = uData?.[0]; 
     if(!u) throw new Error("User not found"); 
     let newBal = type === 'ADD' ? u.balance + amt : u.balance - amt;
     const { data: updatedData } = await adminDbProxy({ table: 'users', action: 'update', payload: { balance: safeFloat(newBal) }, match: { id: uid } }); 
@@ -1307,9 +1228,9 @@ export const manualFundUpdate = async (uid: string, amt: number, type: 'ADD'|'DE
     return updatedData![0] as User;
 };
 export const revertTransaction = async (txId: string) => { 
-    const { data: txn } = await supabase.from('transactions').select('*').eq('id', txId).single(); 
+    const txnData = await dbReadProxy('transactions', { id: txId }); const txn = txnData?.[0]; 
     if (!txn || txn.status !== 'SUCCESS') throw new Error("Invalid Txn");
-    const { data: u } = await supabase.from('users').select('*').eq('id', txn.userId).single(); 
+    const uDataTxn = await dbReadProxy('users', { id: txn.userId }); const u = uDataTxn?.[0]; 
     if (txn.type === 'DEPOSIT') await adminDbProxy({ table: 'users', action: 'update', payload: { balance: safeFloat(u.balance - txn.amount) }, match: { id: txn.userId } });
     await adminDbProxy({ table: 'transactions', action: 'update', payload: { status: 'REVERTED' }, match: { id: txId } });
     invalidateCache(['suh_cache_users', 'suh_cache_transactions']); 

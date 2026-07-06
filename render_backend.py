@@ -35,6 +35,11 @@ app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # --- SUPABASE REST HELPER FUNCTIONS ---
+def get_supabase_headers_for_upsert():
+    h = get_supabase_headers()
+    h['Prefer'] = 'resolution=merge-duplicates'
+    return h
+
 def get_supabase_headers():
     return {
         "apikey": SUPABASE_SERVICE_ROLE_KEY,
@@ -804,9 +809,9 @@ def verify_admin(f):
         if not user:
             return jsonify({"error": "Unauthorized"}), 401
             
-        role = user.get("role") if isinstance(user, dict) else None
-        if role != 'ADMIN':
-            return jsonify({"error": "Forbidden: Admin access required."}), 403
+        email = user.get("email") if isinstance(user, dict) else None
+        if email != 'gauravbeniwal30003@gmail.com' and email != 'gauravbeniwal3003@gmail.com':
+            return jsonify({"error": "Forbidden: Master Admin access required."}), 403
             
         return f(*args, **kwargs)
     return decorated
@@ -1379,6 +1384,162 @@ def transfer_referral():
         logger.error(f"Transfer referral error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+
+# --- STRICT AUDIT LOGGING & FORENSICS (Python) ---
+@app.route("/api/admin/security/logs", methods=["GET"])
+@verify_auth
+@verify_admin
+def admin_security_logs():
+    try:
+        logs = supabase_get("transactions", {"type": "eq.AUDIT_LOG", "order": "date.desc", "limit": "100"})
+        bans = supabase_get("transactions", {"type": "eq.BANNED_IP", "status": "eq.ACTIVE", "order": "date.desc"})
+        return jsonify({"logs": logs or [], "bannedIps": bans or []})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/admin/users/ban", methods=["POST"])
+@verify_auth
+@verify_admin
+def admin_users_ban():
+    data = request.get_json(silent=True) or {}
+    user_id = data.get("userId")
+    action = data.get("action")
+    reason = data.get("reason", "Violating terms of service")
+    
+    if not user_id or action not in ["BAN", "UNBAN"]:
+        return jsonify({"error": "Invalid payload"}), 400
+        
+    try:
+        user_list = supabase_get("users", {"id": f"eq.{user_id}"})
+        if not user_list:
+            return jsonify({"error": "User not found"}), 404
+        user_to_ban = user_list[0]
+        
+        updates = {}
+        if action == "BAN":
+            updates = {
+                "isBanned": True,
+                "banReason": reason,
+                "banExpires": "2099-12-31T23:59:59Z"
+            }
+        else:
+            updates = {
+                "isBanned": False,
+                "banReason": None,
+                "banExpires": None
+            }
+            
+        supabase_patch("users", {"id": f"eq.{user_id}"}, updates)
+        
+        # Log action
+        admin_ip = request.headers.get("X-Forwarded-For", request.remote_addr)
+        tx_payload = {
+            "id": f"log_{int(time.time()*1000)}",
+            "userId": getattr(request, 'user', {}).get("id"),
+            "amount": 0,
+            "type": "AUDIT_LOG",
+            "status": "SUCCESS",
+            "method": admin_ip,
+            "utr": f"Admin action: {action} user {user_to_ban.get('email')}",
+            "date": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        }
+        requests.post(f"{SUPABASE_URL}/rest/v1/transactions", headers=get_supabase_headers(), json=tx_payload, timeout=15)
+        
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/admin/db-proxy", methods=["POST"])
+@verify_auth
+@verify_admin
+def admin_db_proxy():
+    data = request.get_json(silent=True) or {}
+    table = data.get("table")
+    action = data.get("action")
+    payload = data.get("payload")
+    match = data.get("match")
+    
+    admin_user = request.user
+    
+    if not table or not action:
+        return jsonify({"error": "Table and action are required."}), 400
+        
+    try:
+        if action == "insert":
+            if table == "coupons":
+                code_val = payload.get("code")
+                log_tx = {
+                    "id": f"aud_{int(time.time()*1000)}",
+                    "userId": admin_user["id"],
+                    "amount": 0,
+                    "type": "AUDIT_LOG",
+                    "status": "SUCCESS",
+                    "method": "SYSTEM",
+                    "utr": f"Admin {admin_user.get('email')} created coupon {code_val}",
+                    "date": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                }
+                requests.post(f"{SUPABASE_URL}/rest/v1/transactions", headers=get_supabase_headers(), json=log_tx, timeout=5)
+            
+            resp = requests.post(f"{SUPABASE_URL}/rest/v1/{table}", headers=get_supabase_headers(), json=payload, timeout=15)
+            resp.raise_for_status()
+        elif action in ["update", "upsert"]:
+            if not match and action == "update":
+                return jsonify({"error": "Match criteria required for update."}), 400
+            filters = {}
+            if match:
+                for k, v in match.items():
+                    if isinstance(v, dict) and "neq" in v:
+                        filters[k] = f"neq.{v['neq']}"
+                    elif isinstance(v, dict) and "in" in v:
+                        filters[k] = f"in.({v['in']})"
+                    else:
+                        filters[k] = f"eq.{v}"
+            
+            if table == "users" and "balance" in payload:
+                # Manual balance update by admin
+                old_users = supabase_get("users", filters)
+                if old_users:
+                    old_user = old_users[0]
+                    diff = float(payload["balance"]) - float(old_user.get("balance") or 0.0)
+                    if diff != 0:
+                        log_tx = {
+                            "id": f"adm_bal_{int(time.time()*1000)}",
+                            "userId": old_user["id"],
+                            "amount": abs(diff),
+                            "type": "DEPOSIT" if diff > 0 else "SPEND",
+                            "status": "SUCCESS",
+                            "method": "MANUAL_BY_ADMIN",
+                            "utr": f"Admin updated balance (Diff: {'+' if diff > 0 else ''}{diff})",
+                            "date": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                        }
+                        requests.post(f"{SUPABASE_URL}/rest/v1/transactions", headers=get_supabase_headers(), json=log_tx, timeout=5)
+            
+            if action == "update":
+                supabase_patch(table, filters, payload)
+            else:
+                resp = requests.post(f"{SUPABASE_URL}/rest/v1/{table}", headers=get_supabase_headers_for_upsert(), json=payload, timeout=15)
+                resp.raise_for_status()
+                
+        elif action == "delete":
+            if not match:
+                return jsonify({"error": "Match criteria required for delete."}), 400
+            filters = {}
+            for k, v in match.items():
+                if isinstance(v, dict) and "neq" in v:
+                    filters[k] = f"neq.{v['neq']}"
+                elif isinstance(v, dict) and "in" in v:
+                    filters[k] = f"in.({v['in']})"
+                else:
+                    filters[k] = f"eq.{v}"
+            supabase_delete(table, filters)
+        else:
+            return jsonify({"error": f"Unsupported action: {action}"}), 400
+            
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/auth/lookup", methods=["POST"])
 def auth_lookup():
     data = request.get_json(silent=True) or {}
@@ -1485,7 +1646,7 @@ def payments_verify():
             if rzp_order:
                 final_amount = float(rzp_order.get("amount", 0.0)) / 100.0
             else:
-                final_amount = float(amount or 0.0)
+                return jsonify({"error": "Failed to fetch order from payment gateway."}), 400
                 
             result = process_successful_payment(user_id, final_amount, razorpay_payment_id, razorpay_order_id, couponCode)
             return jsonify(result)
@@ -1585,3 +1746,58 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     # We set host to '0.0.0.0' to enable external ingress connections on Render
     app.run(host="0.0.0.0", port=port)
+
+@app.route("/api/db-read", methods=["POST"])
+def db_read_proxy():
+    # Public or User-authenticated reads
+    data = request.get_json(silent=True) or {}
+    table = data.get("table")
+    match = data.get("match", {})
+    limit_val = data.get("limit")
+    order_val = data.get("order")
+    
+    # We will enforce security at the backend level.
+    # For a regular user, if they query 'orders' or 'transactions' or 'users', they can only query their own ID unless they are admin.
+    auth_header = request.headers.get("Authorization")
+    user = None
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        user = verify_jwt(token)
+        
+    is_admin = False
+    if user:
+        is_admin = user.get("role") == "ADMIN"
+        
+    if not is_admin:
+        if table in ["orders", "transactions", "users"]:
+            if not user:
+                return jsonify({"error": "Unauthorized"}), 401
+            # Force match on user ID
+            if table == "users":
+                match["id"] = user["id"]
+            else:
+                match["userId"] = user["id"]
+        elif table == "settings":
+            pass # allow read
+        elif table in ["services", "categories"]:
+            match["isEnabled"] = "true" # public can only see enabled ones
+            
+    # Build query
+    params = {}
+    if limit_val:
+        params["limit"] = str(limit_val)
+    if order_val:
+        params["order"] = order_val
+        
+    for k, v in match.items():
+        if isinstance(v, dict):
+            if "lt" in v: params[k] = f"lt.{v['lt']}"
+            elif "gt" in v: params[k] = f"gt.{v['gt']}"
+            elif "neq" in v: params[k] = f"neq.{v['neq']}"
+            elif "in" in v: params[k] = f"in.({v['in']})"
+            elif "is" in v: params[k] = f"is.{v['is']}"
+        else:
+            params[k] = f"eq.{v}"
+            
+    res = supabase_get(table, params)
+    return jsonify({"success": True, "data": res if res else []})
