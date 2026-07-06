@@ -917,9 +917,8 @@ async function startServer() {
   const verifyAdmin = async (req: any, res: any, next: any) => {
     await verifyAuth(req, res, async () => {
       // MASTER ADMIN EMAIL LOCK
-      const masterAdminEmail = "gauravbeniwal30003@gmail.com";
-      const altAdminEmail = "gauravbeniwal3003@gmail.com";
-      if (req.user?.email !== masterAdminEmail && req.user?.email !== altAdminEmail) {
+      const masterAdminEmail = "gauravbeniwal3003@gmail.com";
+      if (req.user?.email !== masterAdminEmail) {
         console.warn(`[SECURITY] Unauthorized admin attempt by ${req.user?.email || 'Unknown'} (ID: ${req.user?.id})`);
         return res.status(403).json({ error: "Master Admin access required. Unauthorized." });
       }
@@ -2167,7 +2166,7 @@ async function startServer() {
       }
 
       // Security checks
-      const isAdmin = user && (user.email === 'gauravbeniwal30003@gmail.com' || user.email === 'gauravbeniwal3003@gmail.com' || user.role === 'Admin');
+      const isAdmin = user && (user.email === 'gauravbeniwal3003@gmail.com' || user.role === 'Admin' || user.role === 'ADMIN');
       
       if (!isAdmin) {
          if (table === 'coupons') return res.status(403).json({ error: 'Access denied to coupons table.' });

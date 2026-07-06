@@ -810,7 +810,7 @@ def verify_admin(f):
             return jsonify({"error": "Unauthorized"}), 401
             
         email = user.get("email") if isinstance(user, dict) else None
-        if email != 'gauravbeniwal30003@gmail.com' and email != 'gauravbeniwal3003@gmail.com':
+        if email != 'gauravbeniwal3003@gmail.com':
             return jsonify({"error": "Forbidden: Master Admin access required."}), 403
             
         return f(*args, **kwargs)
