@@ -545,10 +545,10 @@ async function startServer() {
   });
 
   // --- RATE LIMITING ---
-  // Allow 100 requests per 15 minutes for general API endpoints
+  // Allow 100000 requests per 15 minutes for general API endpoints
   const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100,
+    max: 100000,
     message: { error: "Too many requests from this IP. Please try again after 15 minutes." },
     standardHeaders: true,
     legacyHeaders: false,
@@ -918,7 +918,8 @@ async function startServer() {
     await verifyAuth(req, res, async () => {
       // MASTER ADMIN EMAIL LOCK
       const masterAdminEmail = "gauravbeniwal30003@gmail.com";
-      if (req.user?.email !== masterAdminEmail) {
+      const altAdminEmail = "gauravbeniwal3003@gmail.com";
+      if (req.user?.email !== masterAdminEmail && req.user?.email !== altAdminEmail) {
         console.warn(`[SECURITY] Unauthorized admin attempt by ${req.user?.email || 'Unknown'} (ID: ${req.user?.id})`);
         return res.status(403).json({ error: "Master Admin access required. Unauthorized." });
       }
@@ -2169,7 +2170,8 @@ async function startServer() {
       const isAdmin = user && (user.email === 'gauravbeniwal30003@gmail.com' || user.email === 'gauravbeniwal3003@gmail.com' || user.role === 'Admin');
       
       if (!isAdmin) {
-         if (['orders', 'transactions', 'users'].includes(table)) {
+         if (table === 'coupons') return res.status(403).json({ error: 'Access denied to coupons table.' });
+             if (['orders', 'transactions', 'users'].includes(table)) {
              if (!user) return res.status(401).json({ error: "Unauthorized" });
              
              // Enforce row level security via proxy if not admin
@@ -2184,16 +2186,14 @@ async function startServer() {
                  }
              } else if ((table === 'orders' || table === 'transactions') && match.userId !== user.id) {
                  // Cron jobs might query pending orders without user context
-                 if (!req.body.allowSystem) {
-                     match.userId = user.id;
-                 }
+                 match.userId = user.id;
              }
          }
       }
 
       let query = supabaseAdmin.from(table).select('*');
       
-      for (const [k, v] of Object.entries(match)) {
+      for (const [k, v] of Object.entries(match || {})) {
           if (v && typeof v === 'object') {
              if ('lt' in v) query = query.lt(k, (v as any).lt);
              else if ('gt' in v) query = query.gt(k, (v as any).gt);
@@ -2222,6 +2222,12 @@ async function startServer() {
     }
   });
 
+
+  app.post("/api/admin/security-log", verifyAllowedSource, async (req: any, res: any) => {
+    console.error("[SECURITY TRACKING ALERT]", req.body);
+    res.json({ success: true });
+  });
+
   app.post("/api/admin/db-proxy", verifyAllowedSource, verifyAdmin, async (req: any, res: any) => {
     try {
       const validation = dbProxySchema.safeParse(req.body);
@@ -2231,12 +2237,12 @@ async function startServer() {
       let query = supabaseAdmin.from(table)[action](payload as any);
       
       if (match) {
-        for (const [key, value] of Object.entries(match)) {
+        for (const [key, value] of Object.entries(match || {})) {
           query = query.eq(key, value);
         }
       }
       if (neq) {
-        for (const [key, value] of Object.entries(neq)) {
+        for (const [key, value] of Object.entries(neq || {})) {
           query = query.neq(key, value);
         }
       }
@@ -2568,6 +2574,16 @@ async function startServer() {
   }
 
   console.log(`Attempting to start server on port ${PORT}...`);
+
+  // GLOBAL ERROR HANDLER TO ENSURE JSON RESPONSES
+  app.use((err: any, req: any, res: any, next: any) => {
+    console.error("Global Express Error:", err);
+    res.status(err.status || 500).json({
+      error: err.message || "Internal Server Error",
+      type: err.type || "UnknownError"
+    });
+  });
+
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server successfully running on http://0.0.0.0:${PORT}`);
   });

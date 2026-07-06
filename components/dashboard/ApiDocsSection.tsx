@@ -64,13 +64,14 @@ export const ApiDocsSection: React.FC = () => {
     setIsGenerating(true);
     try {
       let newKey = '';
-      const res = await fetch(`${window.location.origin}/api/admin/db-proxy`, {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${window.location.origin}/api/users/generate-api-key`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ table: 'users', action: 'update', payload: { api_key: newKey }, match: { id: user.id } })
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` }
       });
       const data = await res.json();
       const error = !res.ok ? { message: data.error } : null;
+      if (data.api_key) newKey = data.api_key;
 
       if (error) {
         throw new Error(error.message || 'Failed to update user key');

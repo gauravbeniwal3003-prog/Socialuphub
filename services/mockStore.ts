@@ -440,10 +440,12 @@ export async function dbReadProxy(table: string, match?: any, options?: any) {
         body: JSON.stringify({ table, match, ...options })
     });
     let result;
+    let textBody = '';
     try {
-        result = await res.json();
+        textBody = await res.text();
+        result = textBody ? JSON.parse(textBody) : {};
     } catch (e) {
-        throw new Error(`DB Read Proxy Parse Error: HTTP ${res.status} - ${res.statusText}`);
+        throw new Error(`DB Read Proxy Parse Error: HTTP ${res.status} - ${res.statusText}. Body: ${textBody.substring(0, 100)}`);
     }
     if (!res.ok || result.error) throw new Error(result.error || "DB Read Proxy Error");
     return result.data || [];
@@ -464,16 +466,24 @@ export async function adminDbProxy(payload: any) {
         body: JSON.stringify(payload)
         });
     let result;
+    let textBody = '';
     try {
-        result = await res.json();
+        textBody = await res.text();
+        result = textBody ? JSON.parse(textBody) : {};
     } catch (e) {
-        throw new Error(`DB Proxy Parse Error: HTTP ${res.status} - ${res.statusText}`);
+        throw new Error(`DB Proxy Parse Error: HTTP ${res.status} - ${res.statusText}. Body: ${textBody.substring(0, 100)}`);
     }
     if (!res.ok || result.error) throw new Error(result.error || "DB Proxy Error");
     return result;
 };
 
 export function getBaseApiUrl(): string {
+    if (typeof window !== 'undefined') {
+        const hn = window.location.hostname;
+        if (hn !== 'socialuphub.in' && hn !== 'socialuphub-smm.web.app' && hn !== 'socialuphub-smm.firebaseapp.com') {
+            return window.location.origin;
+        }
+    }
     if (import.meta.env.VITE_API_URL) {
         return import.meta.env.VITE_API_URL.replace(/\/$/, "");
     }

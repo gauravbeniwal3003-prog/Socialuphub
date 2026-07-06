@@ -2,6 +2,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import Layout from './components/Layout';
+import { SecurityTracker } from './components/SecurityTracker';
 import LandingPage from './components/landing/LandingPage';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { AdminPanel } from './components/admin/AdminPanel';
@@ -855,6 +856,8 @@ const App: React.FC = () => {
     <AuthContext.Provider value={{ user, login, loginWithGoogle, register, logout }}>
       <ScrollToTop />
       <DynamicTheme config={config} />
+      <SecurityTracker intruderHint="App Loaded" />
+      <SecurityTracker intruderHint="App Loaded" />
       <CurrentView />
     </AuthContext.Provider>
   );
