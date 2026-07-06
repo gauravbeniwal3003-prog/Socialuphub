@@ -98,9 +98,11 @@ import {
   Server,
   PlayCircle,
   Code,
+  ShieldAlert,
 } from "lucide-react";
 
 import { ApiManagement } from "./ApiManagement";
+import { SecurityManagement } from "./SecurityManagement";
 
 // --- STYLES & HELPERS ---
 const CONTROL_BAR_CLASS =
@@ -2267,6 +2269,7 @@ export const AdminPanel: React.FC = () => {
     { id: "COUPONS", label: "Coupons", icon: <Tag size={20} /> },
     { id: "SETTINGS", label: "Config", icon: <Settings size={20} /> },
     { id: "API", label: "APIs", icon: <Code size={20} /> },
+    { id: "SECURITY", label: "Security", icon: <ShieldAlert size={20} /> },
   ];
 
   const renderContent = () => {
@@ -2287,6 +2290,8 @@ export const AdminPanel: React.FC = () => {
         return <SettingsManagement notify={notify} />;
       case "API":
         return <ApiManagement notify={notify} />;
+      case "SECURITY":
+        return <SecurityManagement notify={notify} />;
       default:
         return <DashboardOverview />;
     }

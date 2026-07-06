@@ -62,12 +62,12 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Initialize Supabase Admin Client (Server-side only)
-const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://igkrcgcrvnocauccebrf.supabase.co';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlna3JjZ2Nydm5vY2F1Y2NlYnJmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NjgzMDU4MCwiZXhwIjoyMDgyNDA2NTgwfQ.-529L2gcgOFrfN_VVZf6tbPyAlnRFQNQjPBOk8aGwpI';
+const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
 let supabaseAdmin: any;
 try {
-  supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey || '', {
+  supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false
@@ -77,8 +77,263 @@ try {
   console.error("Failed to initialize Supabase Admin:", e);
 }
 
+// ============================================================================
+// SECURITY HARDENING: THREAD-SAFE CONCURRENCY LOCKS & RPC DATABASE FALLBACKS
+// ============================================================================
+
+class UserLock {
+  private static locks = new Set<string>();
+
+  static async acquire(userId: string): Promise<boolean> {
+    if (this.locks.has(userId)) {
+      for (let i = 0; i < 30; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        if (!this.locks.has(userId)) {
+          this.locks.add(userId);
+          return true;
+        }
+      }
+      return false;
+    }
+    this.locks.add(userId);
+    return true;
+  }
+
+  static release(userId: string) {
+    this.locks.delete(userId);
+  }
+}
+
+async function secureDecrementBalance(userId: string, amount: number): Promise<boolean> {
+  const acquired = await UserLock.acquire(userId);
+  if (!acquired) {
+    throw new Error("Could not acquire user transaction lock. Please try again.");
+  }
+  try {
+    // 1. Try real RPC first
+    const { data: success, error: rpcErr } = await supabaseAdmin.rpc('decrement_balance', {
+      user_id: userId,
+      amount: amount
+    });
+    if (!rpcErr) {
+      return success === true;
+    }
+
+    // 2. Fallback to locked select-and-update (since RLS policies are not compiled yet)
+    console.log(`[Security] rpc.decrement_balance not found. Running locked server-side fallback for user ${userId}.`);
+    const { data: user, error: userErr } = await supabaseAdmin.from('users').select('balance, totalSpent').eq('id', userId).single();
+    if (userErr || !user) {
+      throw new Error(`User profile fetch failed: ${userErr?.message || 'Not found'}`);
+    }
+
+    const currentBalance = parseFloat(user.balance || 0);
+    if (currentBalance < amount) {
+      return false;
+    }
+
+    const newBalance = Math.round((currentBalance - amount + Number.EPSILON) * 100) / 100;
+    const newTotalSpent = Math.round(((parseFloat(user.totalSpent || 0)) + amount + Number.EPSILON) * 100) / 100;
+
+    const { error: updErr } = await supabaseAdmin.from('users').update({
+      balance: newBalance,
+      totalSpent: newTotalSpent
+    }).eq('id', userId);
+
+    if (updErr) {
+      throw new Error(`Failed to deduct balance in fallback: ${updErr.message}`);
+    }
+
+    return true;
+  } finally {
+    UserLock.release(userId);
+  }
+}
+
+async function secureIncrementBalance(userId: string, amount: number): Promise<number> {
+  const acquired = await UserLock.acquire(userId);
+  if (!acquired) {
+    throw new Error("Could not acquire user transaction lock. Please try again.");
+  }
+  try {
+    // 1. Try real RPC first
+    const { data: newBal, error: rpcErr } = await supabaseAdmin.rpc('increment_balance', {
+      user_id: userId,
+      amount: amount
+    });
+    if (!rpcErr && newBal !== null && newBal !== undefined) {
+      return parseFloat(newBal);
+    }
+
+    // 2. Fallback
+    console.log(`[Security] rpc.increment_balance not found. Running locked server-side fallback for user ${userId}.`);
+    const { data: user, error: userErr } = await supabaseAdmin.from('users').select('balance').eq('id', userId).single();
+    if (userErr || !user) {
+      throw new Error(`User profile fetch failed: ${userErr?.message || 'Not found'}`);
+    }
+
+    const currentBalance = parseFloat(user.balance || 0);
+    const newBalance = Math.round((currentBalance + amount + Number.EPSILON) * 100) / 100;
+
+    const { error: updErr } = await supabaseAdmin.from('users').update({
+      balance: newBalance
+    }).eq('id', userId);
+
+    if (updErr) {
+      throw new Error(`Failed to add balance in fallback: ${updErr.message}`);
+    }
+
+    return newBalance;
+  } finally {
+    UserLock.release(userId);
+  }
+}
+
+async function secureUseCoupon(couponCode: string, userId: string): Promise<boolean> {
+  const cleanCode = couponCode.trim().toUpperCase();
+  const acquired = await UserLock.acquire(`coupon_${cleanCode}`);
+  if (!acquired) {
+    throw new Error("Could not acquire coupon verification lock. Please try again.");
+  }
+  try {
+    // 1. Try real RPC first
+    const { data: success, error: rpcErr } = await supabaseAdmin.rpc('use_coupon', {
+      coupon_code: cleanCode,
+      user_id: userId
+    });
+    if (!rpcErr) {
+      return success === true;
+    }
+
+    // 2. Fallback
+    console.log(`[Security] rpc.use_coupon not found. Running locked server-side fallback for coupon ${cleanCode}.`);
+    const { data: c, error: couponErr } = await supabaseAdmin.from('coupons').select('*').eq('code', cleanCode).single();
+    if (couponErr || !c) {
+      return false;
+    }
+
+    if (!c.isEnabled) return false;
+
+    if (c.expiryDate) {
+      const expiry = new Date(c.expiryDate);
+      if (isNaN(expiry.getTime()) || expiry < new Date()) {
+        return false;
+      }
+    }
+
+    const usedBy = Array.isArray(c.usedBy) ? c.usedBy : [];
+    if (c.usageLimit > 0 && usedBy.length >= c.usageLimit) {
+      return false;
+    }
+
+    if (usedBy.includes(userId)) {
+      return false;
+    }
+
+    const updatedUsedBy = [...usedBy, userId];
+    const { error: updErr } = await supabaseAdmin.from('coupons').update({
+      usedBy: updatedUsedBy
+    }).eq('code', cleanCode);
+
+    if (updErr) {
+      throw new Error(`Failed to use coupon in fallback: ${updErr.message}`);
+    }
+
+    return true;
+  } finally {
+    UserLock.release(`coupon_${cleanCode}`);
+  }
+}
+
+async function secureAddReferralCommission(referrerId: string, commission: number): Promise<boolean> {
+  const acquired = await UserLock.acquire(referrerId);
+  if (!acquired) {
+    throw new Error("Could not acquire user transaction lock. Please try again.");
+  }
+  try {
+    // 1. Try real RPC first
+    const { data: success, error: rpcErr } = await supabaseAdmin.rpc('add_referral_commission', {
+      referrer_id: referrerId,
+      commission: commission
+    });
+    if (!rpcErr) {
+      return success === true;
+    }
+
+    // 2. Fallback
+    console.log(`[Security] rpc.add_referral_commission not found. Running locked server-side fallback for referrer ${referrerId}.`);
+    const { data: user, error: userErr } = await supabaseAdmin.from('users').select('referral_balance, total_referral_earnings').eq('id', referrerId).single();
+    if (userErr || !user) {
+      return false;
+    }
+
+    const currentRefBalance = parseFloat(user.referral_balance || 0);
+    const currentRefEarnings = parseFloat(user.total_referral_earnings || 0);
+
+    const newRefBalance = Math.round((currentRefBalance + commission + Number.EPSILON) * 100) / 100;
+    const newRefEarnings = Math.round((currentRefEarnings + commission + Number.EPSILON) * 100) / 100;
+
+    const { error: updErr } = await supabaseAdmin.from('users').update({
+      referral_balance: newRefBalance,
+      total_referral_earnings: newRefEarnings
+    }).eq('id', referrerId);
+
+    if (updErr) {
+      throw new Error(`Failed to add referral commission in fallback: ${updErr.message}`);
+    }
+
+    return true;
+  } finally {
+    UserLock.release(referrerId);
+  }
+}
+
+async function secureTransferReferralBalance(userId: string): Promise<number> {
+  const acquired = await UserLock.acquire(userId);
+  if (!acquired) {
+    throw new Error("Could not acquire user transaction lock. Please try again.");
+  }
+  try {
+    // 1. Try real RPC first
+    const { data: transferAmount, error: rpcErr } = await supabaseAdmin.rpc('transfer_referral_balance', {
+      user_id: userId
+    });
+    if (!rpcErr && transferAmount !== null && transferAmount !== undefined) {
+      return parseFloat(transferAmount);
+    }
+
+    // 2. Fallback
+    console.log(`[Security] rpc.transfer_referral_balance not found. Running locked server-side fallback for user ${userId}.`);
+    const { data: user, error: userErr } = await supabaseAdmin.from('users').select('balance, referral_balance').eq('id', userId).single();
+    if (userErr || !user) {
+      throw new Error(`User profile fetch failed: ${userErr?.message || 'Not found'}`);
+    }
+
+    const transferAmountVal = parseFloat(user.referral_balance || 0);
+    if (transferAmountVal <= 0) {
+      return 0;
+    }
+
+    const currentBalance = parseFloat(user.balance || 0);
+    const newBalance = Math.round((currentBalance + transferAmountVal + Number.EPSILON) * 100) / 100;
+
+    const { error: updErr } = await supabaseAdmin.from('users').update({
+      balance: newBalance,
+      referral_balance: 0
+    }).eq('id', userId);
+
+    if (updErr) {
+      throw new Error(`Failed to transfer referral balance in fallback: ${updErr.message}`);
+    }
+
+    return transferAmountVal;
+  } finally {
+    UserLock.release(userId);
+  }
+}
+
 async function startServer() {
   const app = express();
+  app.disable('x-powered-by');
   const PORT = 3000;
 
   // Robust proxy configuration
@@ -196,6 +451,31 @@ async function startServer() {
   }
 
   // --- SECURITY MIDDLEWARE ---
+  
+  // Explicitly block automated exploit scanners and fuzzers (Burp Suite, OWASP ZAP, sqlmap, etc.)
+  app.use((req, res, next) => {
+    const ua = req.headers['user-agent'] || '';
+    const lowerUA = ua.toLowerCase();
+    const blockedTools = [
+      'sqlmap', 'nikto', 'nmap', 'burp', 'zap', 'arachni', 
+      'acunetix', 'dirb', 'dirbuster', 'gobuster', 'w3af', 'netsparker'
+    ];
+    
+    if (blockedTools.some(tool => lowerUA.includes(tool))) {
+      console.warn(`[Security Block] Blocked exploit tool User-Agent: ${ua}`);
+      return res.status(403).json({ error: "Access Denied: Automated vulnerability scanning tools are strictly prohibited." });
+    }
+    
+    // Prevent common directory traversal and XSS probing in query/path
+    const rawUrl = req.originalUrl || req.url;
+    if (rawUrl.includes('../') || rawUrl.includes('..\\') || rawUrl.includes('<script>') || rawUrl.includes('%3Cscript%3E')) {
+      console.warn(`[Security Block] Blocked malicious path/query: ${rawUrl}`);
+      return res.status(400).json({ error: "Access Denied: Malicious payload detected." });
+    }
+    
+    next();
+  });
+
   app.use(helmet({
     contentSecurityPolicy: {
       directives: {
@@ -220,17 +500,23 @@ async function startServer() {
   app.use(cors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
-      const allowedOrigins = [
-        'socialuphub',
-        'web.app',
-        'firebaseapp.com',
-        'localhost',
-        '127.0.0.1',
-        'run.app',
-        'github.dev',
-        'gitpod.io'
+      const lowerOrigin = origin.toLowerCase();
+      
+      // Strict exact match domains (production)
+      const exactAllowedOrigins = [
+        'https://socialuphub.in',
+        'https://socialuphub-smm.web.app',
+        'https://socialuphub-smm.firebaseapp.com'
       ];
-      const isAllowed = allowedOrigins.some(domain => origin.toLowerCase().includes(domain));
+
+      // Safe dev and preview domains
+      const isAllowed = exactAllowedOrigins.includes(lowerOrigin) || 
+                        lowerOrigin.startsWith('http://localhost') ||
+                        lowerOrigin.startsWith('http://127.0.0.1') ||
+                        lowerOrigin.endsWith('.run.app') ||
+                        lowerOrigin.endsWith('.github.dev') ||
+                        lowerOrigin.endsWith('.gitpod.io');
+
       if (isAllowed) {
         return callback(null, true);
       }
@@ -259,11 +545,28 @@ async function startServer() {
   });
 
   // --- RATE LIMITING ---
-  const generalLimiter = (req, res, next) => next();
+  // Allow 100 requests per 15 minutes for general API endpoints
+  const generalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100,
+    message: { error: "Too many requests from this IP. Please try again after 15 minutes." },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: any) => req.ip || req.headers['x-forwarded-for'] || 'global-limit'
+  });
 
-  const orderLimiter = (req, res, next) => next();
+  // Limit order placements or critical API actions to 5 requests per minute to stop automated Kali Linux scripting
+  const orderLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 5,
+    message: { error: "Too many order requests. Please wait a minute before trying again." },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: any) => req.ip || req.headers['x-forwarded-for'] || 'order-limit'
+  });
 
   app.use("/api/", generalLimiter);
+  app.use("/api/admin", securityAuditLogger);
 
   // --- BACKGROUND TASKS (PROCESSED ON SERVER FOR 100% RELIABILITY) ---
   
@@ -498,24 +801,26 @@ async function startServer() {
 
   // --- AUTH MIDDLEWARE ---
   const verifyAuth = async (req: any, res: any, next: any) => {
-    // Try to get token from header
     const authHeader = req.headers.authorization;
-    let userId = req.body?.userId || req.query?.userId;
+    let userId = null;
+    let email = null;
 
     if (authHeader) {
       const token = authHeader.split(' ')[1];
       if (token && token !== 'undefined' && token !== 'null') {
         try {
-          // Decode JWT to extract user ID for basic security (no signature validation needed for basic check)
-          const payloadBase64 = token.split('.')[1];
-          if (payloadBase64) {
-            const decoded = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
-            if (decoded.sub) {
-              userId = decoded.sub;
-            }
+          // Properly verify JWT signature and fetch user using Supabase Auth
+          const { data: { user: authUser }, error } = await supabaseAdmin.auth.getUser(token);
+          
+          if (error || !authUser) {
+             return res.status(401).json({ error: "Invalid or expired session. Please log in again." });
           }
+          
+          userId = authUser.id;
+          email = authUser.email;
         } catch (e) {
-          console.error("JWT Decode error, falling back to body userId:", e);
+          console.error("JWT Verification error:", e);
+          return res.status(401).json({ error: "Authentication failed." });
         }
       }
     }
@@ -524,28 +829,100 @@ async function startServer() {
         return res.status(401).json({ error: "User identification missing. Please log out and log in again." });
     }
 
-    // Verify user exists
-    const { data: user } = await supabaseAdmin.from('users').select('*').eq('id', userId).single();
+    // Strict type casting to String to prevent Type injection/NoSQL logic bypasses
+    const safeUserId = String(userId);
+
+    // Verify user exists in the public users table
+    const { data: user } = await supabaseAdmin.from('users').select('*').eq('id', safeUserId).single();
     
+    if (user && user.isBanned) {
+        return res.status(403).json({ error: "Your account has been suspended." });
+    }
+
     if (!user && req.path !== '/api/sync-user') {
-        return res.status(401).json({ error: "User not found. Please log out and log in again." });
+        return res.status(401).json({ error: "User profile not found. Please log out and log in again." });
     }
 
-    let email = req.body?.email || req.query?.email || null;
-    if (authHeader) {
-      try {
-          const payloadBase64 = authHeader.split(' ')[1].split('.')[1];
-          const decoded = JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
-          if (decoded.email) email = decoded.email;
-      } catch (e) {}
+    req.user = user || { id: safeUserId, email: email };
+    next();
+  };
+
+  // --- STRICT AUDIT LOGGING & FORENSICS ---
+  const bannedIps = new Set<string>();
+
+  // Fetch banned IPs on startup and periodically
+  const loadBannedIps = async () => {
+    try {
+      const { data } = await supabaseAdmin.from('transactions').select('method').eq('type', 'BANNED_IP').eq('status', 'ACTIVE');
+      if (data) {
+        bannedIps.clear();
+        data.forEach(d => bannedIps.add(d.method));
+      }
+    } catch (e) {
+      console.error("Failed to load banned IPs:", e);
+    }
+  };
+  loadBannedIps();
+  setInterval(loadBannedIps, 60000); // refresh every minute
+
+  function securityAuditLogger(req: any, res: any, next: any) {
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip;
+    const ua = req.headers['user-agent'] || 'Unknown';
+    const method = req.method;
+    const url = req.originalUrl || req.url;
+    
+    // Check strict IP ban list from Database Cache
+    if (bannedIps.has(ip) || (process.env.BANNED_IPS && process.env.BANNED_IPS.includes(ip))) {
+      console.warn(`[SECURITY BAN ENFORCED] Blocked request from permanently banned IP: ${ip} | Path: ${url}`);
+      return res.status(403).json({ error: "Access Denied: Your IP address has been permanently blocked due to malicious activity." });
     }
 
-    req.user = user || { id: userId, email: email };
+    // Log all admin actions for forensic evidence
+    if (url.startsWith('/api/admin')) {
+        const forensicData = {
+           timestamp: new Date().toISOString(),
+           ip_address: ip,
+           user_agent: ua,
+           method: method,
+           path: url,
+           user_id: req.user?.id || 'Unauthenticated',
+           body_payload: req.body
+        };
+        const logMsg = `Admin Action: ${method} ${url}`;
+        console.warn("[FORENSIC AUDIT LOG]", JSON.stringify(forensicData));
+        
+        // Asynchronously persist to DB without blocking the request
+        (async () => {
+            try {
+                const { error } = await supabaseAdmin.from('transactions').insert({
+                    id: `audit_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+                    userId: req.user?.id || null,
+                    amount: 0,
+                    type: 'AUDIT_LOG',
+                    status: 'INFO',
+                    method: ip,
+                    utr: logMsg.substring(0, 255), // Store action in UTR (limited space, so keeping it concise)
+                    date: new Date().toISOString()
+                });
+                if (error) console.error("Failed to persist audit log:", error);
+            } catch (err) {
+                console.error("Failed to persist audit log:", err);
+            }
+        })();
+    }
+    
     next();
   };
 
   const verifyAdmin = async (req: any, res: any, next: any) => {
     await verifyAuth(req, res, async () => {
+      // MASTER ADMIN EMAIL LOCK
+      const masterAdminEmail = "gauravbeniwal30003@gmail.com";
+      if (req.user?.email !== masterAdminEmail) {
+        console.warn(`[SECURITY] Unauthorized admin attempt by ${req.user?.email || 'Unknown'} (ID: ${req.user?.id})`);
+        return res.status(403).json({ error: "Master Admin access required. Unauthorized." });
+      }
+
       const { data: profile } = await supabaseAdmin
         .from('users')
         .select('role')
@@ -559,13 +936,79 @@ async function startServer() {
     });
   };
 
+  // --- ALLOWED SOURCE MIDDLEWARE (Anti-Exploit / Anti-Burp Suite) ---
+  const verifyAllowedSource = (req: any, res: any, next: any) => {
+    const origin = req.headers.origin;
+    const referer = req.headers.referer;
+
+    // Allowed domains requested by user
+    const allowedDomains = [
+      "socialuphub.in",
+      "socialuphub-smm.web.app",
+      "socialuphub-smm.firebaseapp.com"
+    ];
+
+    // Development & preview domains for testing
+    const devDomains = [
+      "localhost",
+      "127.0.0.1",
+      "run.app", // Dev & preview URLs
+      "github.dev",
+      "gitpod.io"
+    ];
+
+    const allAllowed = [...allowedDomains, ...devDomains];
+
+    const isUrlAllowed = (url: string) => {
+      try {
+        let parsedUrl = url;
+        if (!parsedUrl.startsWith('http')) {
+          parsedUrl = 'https://' + parsedUrl;
+        }
+        const parsed = new URL(parsedUrl);
+        const hostname = parsed.hostname.toLowerCase();
+        return allAllowed.some(domain => {
+          return hostname === domain || hostname.endsWith("." + domain);
+        });
+      } catch (e) {
+        return false;
+      }
+    };
+
+    // 1. If Origin header is present, validate it
+    if (origin) {
+      if (!isUrlAllowed(origin)) {
+        console.warn(`[Security Block] Blocked Origin: ${origin} on path: ${req.path}`);
+        return res.status(403).json({ error: "Access denied: Unauthorized source origin." });
+      }
+      return next();
+    }
+
+    // 2. If Referer header is present, validate it
+    if (referer) {
+      if (!isUrlAllowed(referer)) {
+        console.warn(`[Security Block] Blocked Referer: ${referer} on path: ${req.path}`);
+        return res.status(403).json({ error: "Access denied: Unauthorized source referer." });
+      }
+      return next();
+    }
+
+    // 3. Reject non-GET requests without Origin/Referer (likely direct API/Burp Suite attacks)
+    if (req.method !== "GET" && req.method !== "OPTIONS") {
+      console.warn(`[Security Block] Blocked direct request (no Origin/Referer headers) on path: ${req.path}`);
+      return res.status(403).json({ error: "Access denied: Request must originate from an authorized source." });
+    }
+
+    next();
+  };
+
   // --- USER PLATFORM SMM API ENDPOINT ---
   app.all("/api/v2", orderLimiter, async (req, res) => {
     // SMM clients default to urlencoded bodies, which Express parses into req.body.
     // Allow query parameters too as some platforms mix parameter types.
     const data = { ...req.query, ...req.body };
-    const apiKey = data.key;
-    const action = data.action;
+    const apiKey = data.key ? String(data.key).trim() : null;
+    const action = data.action ? String(data.action).trim() : null;
 
     if (!apiKey) {
       return res.json({ error: "Declined: SMM key parameter is missing" });
@@ -717,125 +1160,144 @@ async function startServer() {
           return res.json({ error: `Declined: quantity parameter must be a positive integer (received: ${data.quantity})` });
         }
 
-        // Fetch service details
-        const { data: service, error: srvErr } = await supabaseAdmin
-          .from('services')
-          .select('*')
-          .eq('service', serviceId)
-          .single();
-
-        if (srvErr || !service) {
-          return res.json({ error: `Declined: Service ID ${serviceId} could not be found on this platform` });
+        // Acquire sequential order placement lock for this user to neutralize any Burp Suite race condition/double-spending exploits
+        const acquired = await UserLock.acquire(`place_order_${user.id}`);
+        if (!acquired) {
+          return res.json({ error: "An order transaction is already in progress for this account. Please wait." });
         }
 
-        // Fetch active categories to check if this service belongs to a disabled category
-        const { data: catCheck } = await supabaseAdmin
-          .from('categories')
-          .select('isEnabled')
-          .eq('name', service.category)
-          .single();
+        try {
+          // Fetch service details
+          const { data: service, error: srvErr } = await supabaseAdmin
+            .from('services')
+            .select('*')
+            .eq('service', serviceId)
+            .single();
 
-        if (!service.isEnabled || !catCheck || !catCheck.isEnabled) {
-          return res.json({ error: `Declined: Service ID ${serviceId} is currently disabled or its category is inactive on this platform` });
-        }
+          if (srvErr || !service) {
+            return res.json({ error: `Declined: Service ID ${serviceId} could not be found on this platform` });
+          }
 
-        let minQty = parseInt(service.min || 10);
-        if (minQty >= 0 && minQty <= 99) {
-          minQty = 100;
-        }
-        const maxQty = parseInt(service.max || 10000);
+          // Fetch active categories to check if this service belongs to a disabled category
+          const { data: catCheck } = await supabaseAdmin
+            .from('categories')
+            .select('isEnabled')
+            .eq('name', service.category)
+            .single();
 
-        if (qtyVal < minQty) {
-          return res.json({ error: `Declined: Provided quantity (${qtyVal}) is less than the minimum required limit of ${minQty} for this service` });
-        }
-        if (qtyVal > maxQty) {
-          return res.json({ error: `Declined: Provided quantity (${qtyVal}) exceeds the maximum allowed limit of ${maxQty} for this service` });
-        }
+          if (!service.isEnabled || !catCheck || !catCheck.isEnabled) {
+            return res.json({ error: `Declined: Service ID ${serviceId} is currently disabled or its category is inactive on this platform` });
+          }
 
-        // Fetch config to apply margins & custom API discounts
-        const { data: config } = await supabaseAdmin
-          .from('settings')
-          .select('*')
-          .eq('id', 'global')
-          .single();
+          let minQty = parseInt(service.min || 10);
+          if (minQty >= 0 && minQty <= 99) {
+            minQty = 100;
+          }
+          const maxQty = parseInt(service.max || 10000);
 
-        const marginPercent = service.customMarginPercent !== undefined && service.customMarginPercent !== null ? parseFloat(service.customMarginPercent) : parseFloat(config?.globalMarginPercent || 0);
-        const marginFixed = service.customMarginFixed !== undefined && service.customMarginFixed !== null ? parseFloat(service.customMarginFixed) : parseFloat(config?.globalMarginFixed || 0);
+          if (qtyVal < minQty) {
+            return res.json({ error: `Declined: Provided quantity (${qtyVal}) is less than the minimum required limit of ${minQty} for this service` });
+          }
+          if (qtyVal > maxQty) {
+            return res.json({ error: `Declined: Provided quantity (${qtyVal}) exceeds the maximum allowed limit of ${maxQty} for this service` });
+          }
 
-        let rate = parseFloat(service.rate || 0);
-        if (marginPercent) rate += rate * (marginPercent / 100);
-        if (marginFixed) rate += marginFixed;
+          // Fetch config to apply margins & custom API discounts
+          const { data: config } = await supabaseAdmin
+            .from('settings')
+            .select('*')
+            .eq('id', 'global')
+            .single();
 
-        // Apply Custom API Discount directly on the overall SMM final rate
-        const apiDiscount = parseFloat(config?.apiDiscountPercent || 0);
-        let apiServiceRate = rate;
-        if (apiDiscount > 0) {
-          apiServiceRate = Math.round((rate * (1 - apiDiscount / 100) + Number.EPSILON) * 100) / 100;
-        } else {
-          apiServiceRate = Math.round((rate + Number.EPSILON) * 100) / 100;
-        }
+          const marginPercent = service.customMarginPercent !== undefined && service.customMarginPercent !== null ? parseFloat(service.customMarginPercent) : parseFloat(config?.globalMarginPercent || 0);
+          const marginFixed = service.customMarginFixed !== undefined && service.customMarginFixed !== null ? parseFloat(service.customMarginFixed) : parseFloat(config?.globalMarginFixed || 0);
 
-        const charge = Math.round(((apiServiceRate * qtyVal) / 1000 + Number.EPSILON) * 100) / 100;
+          let rate = parseFloat(service.rate || 0);
+          if (marginPercent) rate += rate * (marginPercent / 100);
+          if (marginFixed) rate += marginFixed;
 
-        // Check user funds balance
-        if (user.balance < charge) {
+          // Apply Custom API Discount directly on the overall SMM final rate
+          const apiDiscount = parseFloat(config?.apiDiscountPercent || 0);
+          let apiServiceRate = rate;
+          if (apiDiscount > 0) {
+            apiServiceRate = Math.round((rate * (1 - apiDiscount / 100) + Number.EPSILON) * 100) / 100;
+          } else {
+            apiServiceRate = Math.round((rate + Number.EPSILON) * 100) / 100;
+          }
+
+          const charge = Math.round(((apiServiceRate * qtyVal) / 1000 + Number.EPSILON) * 100) / 100;
+
+          // Re-fetch user balance inside lock to prevent race conditions from stale cache
+          const { data: freshUser } = await supabaseAdmin
+            .from('users')
+            .select('balance')
+            .eq('id', user.id)
+            .single();
+
+          const userBalance = parseFloat(freshUser?.balance || 0);
+          if (userBalance < charge) {
+            return res.json({ 
+              error: `Declined: Insufficient funds. Your balance is ₹${userBalance.toFixed(2)}, but this order requires ₹${charge.toFixed(2)} (Charge per 1k = ₹${apiServiceRate.toFixed(2)})` 
+            });
+          }
+
+          // Securely deduct funds atomically with fallback lock
+          const deducted = await secureDecrementBalance(user.id, charge);
+          if (!deducted) {
+            return res.json({ 
+              error: `Declined: Insufficient funds.` 
+            });
+          }
+
+          // Generate unique custom order and transaction string IDs matching database constraints
+          const orderId = `ord_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+          const txnId = `txn_${Date.now()}`;
+
+          // Place the Order in our database
+          const { data: newOrder, error: orderErr } = await supabaseAdmin
+            .from('orders')
+            .insert({
+              id: orderId,
+              userId: user.id,
+              serviceId: service.service,
+              serviceName: service.name,
+              link: link,
+              quantity: qtyVal,
+              charge: charge,
+              start_count: 0,
+              status: 'Pending',
+              date: new Date().toISOString(),
+              placed_via_api: true,
+              api_user_id: user.id
+            })
+            .select()
+            .single();
+
+          if (orderErr) throw orderErr;
+
+          // Log spending transaction
+          await supabaseAdmin
+            .from('transactions')
+            .insert({
+              id: txnId,
+              userId: user.id,
+              amount: charge,
+              type: 'SPEND',
+              status: 'SUCCESS',
+              method: 'API_ORDER',
+              date: new Date().toISOString()
+            });
+
           return res.json({ 
-            error: `Declined: Insufficient funds. Your balance is ₹${parseFloat(user.balance).toFixed(2)}, but this order requires ₹${charge.toFixed(2)} (Charge per 1k = ₹${apiServiceRate.toFixed(2)})` 
+            order: orderId, 
+            status: "Order placed successfully" 
           });
+        } catch (err: any) {
+          console.error("API Order Placement Error:", err);
+          return res.json({ error: "Internal server error occurred while placing order." });
+        } finally {
+          UserLock.release(`place_order_${user.id}`);
         }
-
-        const newBalance = Math.round((user.balance - charge + Number.EPSILON) * 100) / 100;
-        const newTotalSpent = Math.round(((user.totalSpent || 0) + charge + Number.EPSILON) * 100) / 100;
-
-        // Securely deduct funds
-        await supabaseAdmin
-          .from('users')
-          .update({ balance: newBalance, totalSpent: newTotalSpent })
-          .eq('id', user.id);
-
-        // Generate unique custom order and transaction string IDs matching database constraints
-        const orderId = `ord_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-        const txnId = `txn_${Date.now()}`;
-
-        // Place the Order in our database
-        const { data: newOrder, error: orderErr } = await supabaseAdmin
-          .from('orders')
-          .insert({
-            id: orderId,
-            userId: user.id,
-            serviceId: service.service,
-            serviceName: service.name,
-            link: link,
-            quantity: qtyVal,
-            charge: charge,
-            start_count: 0,
-            status: 'Pending',
-            date: new Date().toISOString(),
-            placed_via_api: true,
-            api_user_id: user.id
-          })
-          .select()
-          .single();
-
-        if (orderErr) throw orderErr;
-
-        // Log spending transaction
-        await supabaseAdmin
-          .from('transactions')
-          .insert({
-            id: txnId,
-            userId: user.id,
-            amount: charge,
-            type: 'SPEND',
-            status: 'SUCCESS',
-            method: 'API_ORDER',
-            date: new Date().toISOString()
-          });
-
-        return res.json({ 
-          order: orderId, 
-          status: "Order placed successfully" 
-        });
       }
 
       // 5. STATUS CHECK ACTION
@@ -1085,10 +1547,7 @@ async function startServer() {
          const { data: c } = await supabaseAdmin.from("coupons").select("*").eq("code", cleanCode).single();
          if (c && c.isEnabled && c.category === "DEPOSIT" && amount >= c.minAmount) {
            // Safely consume the coupon
-           const { data: couponApplied } = await supabaseAdmin.rpc("use_coupon", {
-             coupon_code: c.code,
-             user_id: userId,
-           });
+           const couponApplied = await secureUseCoupon(c.code, userId);
 
            if (couponApplied) {
              couponAppliedSuccessfully = true;
@@ -1137,12 +1596,12 @@ async function startServer() {
          if (insertErr) throw new Error(`Transaction insertion failed: ${insertErr.message}`);
        }
 
-       // Atomic wallet balance addition
-       const { error: balErr } = await supabaseAdmin.rpc("increment_balance", {
-         user_id: userId,
-         amount: totalCredit,
-       });
-       if (balErr) throw new Error("Atomic wallet balance increment failed");
+       // Atomic wallet balance addition with fallback lock
+       try {
+         await secureIncrementBalance(userId, totalCredit);
+       } catch (balErr: any) {
+         throw new Error(`Atomic wallet balance increment failed: ${balErr.message}`);
+       }
 
        // Update last payment timestamp
        await supabaseAdmin.from("users").update({ lastPaymentAt: new Date().toISOString() }).eq("id", userId);
@@ -1160,7 +1619,7 @@ async function startServer() {
      couponCode: z.string().optional()
    });
 
-   app.post("/api/payments/create-order", verifyAuth, async (req: any, res: any) => {
+   app.post("/api/payments/create-order", verifyAllowedSource, verifyAuth, async (req: any, res: any) => {
      const validation = razorpayCreateOrderSchema.safeParse(req.body);
      if (!validation.success) return res.status(400).json({ error: "Invalid request parameters" });
 
@@ -1225,7 +1684,7 @@ async function startServer() {
      couponCode: z.string().optional()
    });
 
-   app.post("/api/payments/verify", verifyAuth, async (req: any, res: any) => {
+   app.post("/api/payments/verify", verifyAllowedSource, verifyAuth, async (req: any, res: any) => {
      const validation = razorpayVerifySchema.safeParse(req.body);
      if (!validation.success) return res.status(400).json({ error: "Invalid payment data" });
 
@@ -1362,7 +1821,7 @@ async function startServer() {
     userId: z.string().uuid()
   });
 
-  app.post("/api/coupons/verify", verifyAuth, async (req: any, res: any) => {
+  app.post("/api/coupons/verify", verifyAllowedSource, verifyAuth, async (req: any, res: any) => {
     const validation = verifyCouponSchema.safeParse(req.body);
     if (!validation.success) return res.status(400).json({ error: "Invalid input" });
     
@@ -1439,7 +1898,7 @@ async function startServer() {
     couponCode: z.string().optional()
   });
 
-  app.post("/api/orders/place", verifyAuth, async (req: any, res: any) => {
+  app.post("/api/orders/place", verifyAllowedSource, verifyAuth, async (req: any, res: any) => {
 
     const validation = placeOrderSchema.safeParse(req.body);
     if (!validation.success) return res.status(400).json({ error: "Invalid input" });
@@ -1448,6 +1907,12 @@ async function startServer() {
     
     if (req.user.id !== userId) return res.status(403).json({ error: "Unauthorized user mismatch" });
     
+    // Acquire sequential order placement lock for this user to neutralize any Burp Suite race condition/double-spending exploits
+    const acquired = await UserLock.acquire(`place_order_${userId}`);
+    if (!acquired) {
+      return res.status(429).json({ error: "An order transaction is already in progress for this account. Please wait." });
+    }
+
     try {
         // Duplicate check
         const { data: existingOrder } = await supabaseAdmin.from('orders')
@@ -1508,7 +1973,7 @@ async function startServer() {
             }
             
             // Safely use coupon
-            const { data: couponApplied } = await supabaseAdmin.rpc('use_coupon', { coupon_code: c.code, user_id: userId });
+            const couponApplied = await secureUseCoupon(c.code, userId);
             
             if (!couponApplied) {
                 return res.status(400).json({ error: "Coupon is invalid, expired, or has reached its usage limit." });
@@ -1524,20 +1989,19 @@ async function startServer() {
             finalCost = Math.round((finalCost + Number.EPSILON) * 100) / 100; // Round to 2 decimal places
         }
 
+        // DOUBLE-CHECK BALANCE: Prevent placing order if user balance is insufficient (Burp Suite exploit safety)
+        const userLiveBalance = parseFloat(user.balance || 0);
+        if (userLiveBalance < finalCost) {
+            return res.status(400).json({ error: `Insufficient balance. Required: ₹${finalCost.toFixed(2)}, Available: ₹${userLiveBalance.toFixed(2)}` });
+        }
+
         const orderId = `ord_${Date.now()}`;
         const txnId = `txn_${Date.now()}`;
 
-        // Safely Deduct Balance (Basic check without RPC)
-        if (user.balance < finalCost) {
+        // Safely Deduct Balance (Atomic with fallback lock)
+        const deducted = await secureDecrementBalance(userId, finalCost);
+        if (!deducted) {
             return res.status(400).json({ error: "Insufficient balance." });
-        }
-        
-        const newBalance = Math.round((user.balance - finalCost) * 100) / 100;
-        const { error: balErr } = await supabaseAdmin.from('users').update({ balance: newBalance }).eq('id', userId);
-        
-        if (balErr) {
-            console.error("Balance deduction error:", balErr);
-            return res.status(500).json({ error: "Failed to deduct balance. Please try again." });
         }
 
         // Insert Order
@@ -1558,7 +2022,7 @@ async function startServer() {
             if (configData && configData.referral_commission_percent > 0) {
                 const commission = Number(((finalCost * configData.referral_commission_percent) / 100).toFixed(2));
                 if (commission > 0) {
-                    await supabaseAdmin.rpc('add_referral_commission', { referrer_id: user.referred_by, commission: commission });
+                    await secureAddReferralCommission(user.referred_by, commission);
                     await supabaseAdmin.from('transactions').insert({
                         id: `ref_com_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
                         userId: user.referred_by,
@@ -1618,8 +2082,11 @@ async function startServer() {
         }
 
         res.json({ success: true, orderId });
-    } catch (err) {
-        res.status(500).json({ error: "Server error" });
+    } catch (err: any) {
+        console.error("Order placement route failure:", err);
+        res.status(500).json({ error: err.message || "Server error" });
+    } finally {
+        UserLock.release(`place_order_${userId}`);
     }
   });
 
@@ -1629,7 +2096,50 @@ async function startServer() {
     amount: z.number().min(0),
   });
 
-  app.post("/api/admin/update-balance", verifyAdmin, async (req, res) => {
+  app.get("/api/admin/security/logs", verifyAllowedSource, verifyAdmin, async (req, res) => {
+    try {
+      const { data: logs } = await supabaseAdmin.from('transactions').select('*').eq('type', 'AUDIT_LOG').order('date', { ascending: false }).limit(100);
+      const { data: bans } = await supabaseAdmin.from('transactions').select('*').eq('type', 'BANNED_IP').eq('status', 'ACTIVE').order('date', { ascending: false });
+      res.json({ logs: logs || [], bannedIps: bans || [] });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/security/ban", verifyAllowedSource, verifyAdmin, async (req, res) => {
+    const { ip, reason } = req.body;
+    if (!ip) return res.status(400).json({ error: "IP address required" });
+    try {
+      await supabaseAdmin.from('transactions').upsert({
+        id: `banned_ip_${ip}`,
+        userId: null,
+        amount: 0,
+        type: 'BANNED_IP',
+        status: 'ACTIVE',
+        method: ip,
+        utr: reason || 'Manual Ban',
+        date: new Date().toISOString()
+      }, { onConflict: 'id' });
+      bannedIps.add(ip);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/security/unban", verifyAllowedSource, verifyAdmin, async (req, res) => {
+    const { ip } = req.body;
+    if (!ip) return res.status(400).json({ error: "IP address required" });
+    try {
+      await supabaseAdmin.from('transactions').update({ status: 'REVOKED' }).eq('id', `banned_ip_${ip}`);
+      bannedIps.delete(ip);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/update-balance", verifyAllowedSource, verifyAdmin, async (req, res) => {
     const validation = balanceUpdateSchema.safeParse(req.body);
     if (!validation.success) return res.status(400).json({ error: "Invalid input" });
 
@@ -1648,11 +2158,15 @@ async function startServer() {
     }
   });
 
-  app.post("/api/users/transfer-referral", verifyAuth, async (req: any, res: any) => {
+  app.post("/api/users/transfer-referral", verifyAllowedSource, verifyAuth, async (req: any, res: any) => {
     const userId = req.user.id;
     try {
-        const { data: transferAmount, error: rpcErr } = await supabaseAdmin.rpc('transfer_referral_balance', { user_id: userId });
-        if (rpcErr) throw rpcErr;
+        let transferAmount;
+        try {
+          transferAmount = await secureTransferReferralBalance(userId);
+        } catch (rpcErr: any) {
+          return res.status(400).json({ error: `RPC failed: ${rpcErr.message}` });
+        }
         
         if (!transferAmount || transferAmount <= 0) return res.status(400).json({ error: "No referral earnings to transfer." });
         
@@ -1676,7 +2190,7 @@ async function startServer() {
   });
 
   // Public auth helpers to bypass client-side RLS before login/signup
-  app.post("/api/auth/lookup", async (req: any, res: any) => {
+  app.post("/api/auth/lookup", verifyAllowedSource, async (req: any, res: any) => {
     const { action, value } = req.body;
     if (!action || !value) {
       return res.status(400).json({ error: "Missing parameters" });
@@ -1724,14 +2238,19 @@ async function startServer() {
   });
 
   // Synchronize/Create User Profile safely bypassing RLS
-  app.post("/api/sync-user", verifyAuth, async (req: any, res: any) => {
+  app.post("/api/sync-user", verifyAllowedSource, verifyAuth, async (req: any, res: any) => {
     const { name, mobile, referredByCode } = req.body;
     const { id, email } = req.user;
 
+    // Type enforcement to prevent NoSQL object injections
+    const safeName = name ? String(name).trim() : undefined;
+    const safeMobile = mobile ? String(mobile).trim() : undefined;
+    const safeReferredByCode = referredByCode ? String(referredByCode).trim() : undefined;
+
     // Validate lengths
-    if (name && typeof name === 'string' && name.length > 50) return res.status(400).json({ error: "Name too long." });
-    if (mobile && typeof mobile === 'string' && mobile.length > 15) return res.status(400).json({ error: "Mobile too long." });
-    if (referredByCode && typeof referredByCode === 'string' && referredByCode.length > 20) return res.status(400).json({ error: "Referral code too long." });
+    if (safeName && safeName.length > 50) return res.status(400).json({ error: "Name too long." });
+    if (safeMobile && safeMobile.length > 15) return res.status(400).json({ error: "Mobile too long." });
+    if (safeReferredByCode && safeReferredByCode.length > 20) return res.status(400).json({ error: "Referral code too long." });
 
     try {
       // 1. Check if user already exists
@@ -1745,15 +2264,15 @@ async function startServer() {
 
       if (existingUser) {
         const updates: any = { lastLogin: new Date().toISOString() };
-        if (name && !existingUser.name) updates.name = name;
-        if (mobile && !existingUser.mobile) updates.mobile = mobile;
+        if (safeName && !existingUser.name) updates.name = safeName;
+        if (safeMobile && !existingUser.mobile) updates.mobile = safeMobile;
 
         // If the trigger created the user but couldn't set referred_by, do it here once.
-        if (referredByCode && !existingUser.referred_by) {
+        if (safeReferredByCode && !existingUser.referred_by) {
             const { data: refUser } = await supabaseAdmin
               .from('users')
               .select('id')
-              .eq('referral_code', referredByCode.toUpperCase())
+              .eq('referral_code', safeReferredByCode.toUpperCase())
               .maybeSingle();
             
             if (refUser && refUser.id !== id) {
@@ -1762,7 +2281,7 @@ async function startServer() {
               // Give signup bonus if enabled
               const { data: configData } = await supabaseAdmin.from('settings').select('*').eq('id', 'global').single();
               if (configData && configData.isReferralSystemEnabled && configData.referralSignupBonus > 0) {
-                 await supabaseAdmin.rpc('increment_balance', { user_id: id, amount: configData.referralSignupBonus });
+                 await secureIncrementBalance(id, configData.referralSignupBonus);
                  await supabaseAdmin.from('transactions').insert({
                     id: `ref_sign_${Date.now()}`,
                     userId: id,

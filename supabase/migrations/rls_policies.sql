@@ -46,6 +46,7 @@ END $$;
 
 -- 2. CLEAN UP PREVIOUS POLICIES & FUNCTIONS TO PREVENT CONFLICTS
 DROP POLICY IF EXISTS "Users can view own profile" ON public.users;
+DROP POLICY IF EXISTS "Users can insert own profile" ON public.users;
 DROP POLICY IF EXISTS "Users can update own profile" ON public.users;
 DROP POLICY IF EXISTS "Users can view own data" ON public.users;
 DROP POLICY IF EXISTS "Users can update own data" ON public.users;
@@ -120,6 +121,18 @@ WITH CHECK (
 -- Admins can do everything
 CREATE POLICY "Admins have full access to users" ON public.users
 FOR ALL USING (public.is_admin());
+
+-- Users can insert their own profile with safe initial values only
+CREATE POLICY "Users can insert own profile" ON public.users
+FOR INSERT WITH CHECK (
+  auth.uid()::text = id::text AND
+  role = 'USER' AND
+  balance = 0 AND
+  "totalSpent" = 0 AND
+  referral_balance = 0 AND
+  total_referral_earnings = 0 AND
+  isBanned = false
+);
 
 -- 6. ORDERS TABLE POLICIES
 -- Users can view their own orders

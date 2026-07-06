@@ -83,6 +83,119 @@ def supabase_delete(table, filters):
         logger.error(f"Supabase DELETE Error on table '{table}': {str(e)}")
         return None
 
+# ============================================================================
+# SECURITY HARDENING: THREAD-SAFE CONCURRENCY LOCKS & RPC DATABASE FALLBACKS
+# ============================================================================
+
+_user_locks = {}
+_user_locks_mutex = threading.Lock()
+
+def get_user_lock(user_id):
+    with _user_locks_mutex:
+        if user_id not in _user_locks:
+            _user_locks[user_id] = threading.Lock()
+        return _user_locks[user_id]
+
+def secure_decrement_balance(user_id, amount):
+    # Try the real RPC first
+    success = supabase_rpc("decrement_balance", {"user_id": user_id, "amount": amount})
+    if success:
+        return True
+        
+    logger.info(f"[Security] rpc.decrement_balance failed. Using python-locked fallback for user {user_id}.")
+    lock = get_user_lock(user_id)
+    with lock:
+        user_list = supabase_get("users", {"id": f"eq.{user_id}"})
+        if not user_list:
+            return False
+        user = user_list[0]
+        curr_bal = float(user.get("balance") or 0.0)
+        if curr_bal < amount:
+            return False
+            
+        new_bal = round(curr_bal - amount, 2)
+        new_spent = round(float(user.get("totalSpent") or 0.0) + amount, 2)
+        
+        supabase_patch("users", {"id": f"eq.{user_id}"}, {"balance": new_bal, "totalSpent": new_spent})
+        return True
+
+def secure_increment_balance(user_id, amount):
+    res = supabase_rpc("increment_balance", {"user_id": user_id, "amount": amount})
+    if res is not False and res is not None:
+        return float(res) if isinstance(res, (int, float)) else True
+        
+    logger.info(f"[Security] rpc.increment_balance failed. Using python-locked fallback for user {user_id}.")
+    lock = get_user_lock(user_id)
+    with lock:
+        user_list = supabase_get("users", {"id": f"eq.{user_id}"})
+        if not user_list:
+            raise Exception("User not found in fallback increment_balance")
+        user = user_list[0]
+        curr_bal = float(user.get("balance") or 0.0)
+        new_bal = round(curr_bal + amount, 2)
+        supabase_patch("users", {"id": f"eq.{user_id}"}, {"balance": new_bal})
+        return new_bal
+
+def secure_use_coupon(coupon_code, user_id):
+    success = supabase_rpc("use_coupon", {"coupon_code": coupon_code, "user_id": user_id})
+    if success:
+        return True
+        
+    logger.info(f"[Security] rpc.use_coupon failed. Using python-locked fallback for coupon {coupon_code}.")
+    lock = get_user_lock(f"coupon_{coupon_code}")
+    with lock:
+        c_list = supabase_get("coupons", {"code": f"eq.{coupon_code}"})
+        if not c_list:
+            return False
+        c = c_list[0]
+        if not c.get("isEnabled"):
+            return False
+            
+        if c.get("expiryDate"):
+            try:
+                expiry_str = c.get("expiryDate").replace('Z', '')
+                expiry_struct = time.strptime(expiry_str.split('.')[0], "%Y-%m-%dT%H:%M:%S" if 'T' in expiry_str else "%Y-%m-%d %H:%M:%S")
+                if time.mktime(expiry_struct) < time.time():
+                    return False
+            except Exception:
+                return False
+                
+        used_by = c.get("usedBy") or []
+        if not isinstance(used_by, list):
+            used_by = []
+            
+        limit = int(c.get("usageLimit") or 0)
+        if limit > 0 and len(used_by) >= limit:
+            return False
+            
+        if user_id in used_by:
+            return False
+            
+        new_used_by = used_by + [user_id]
+        supabase_patch("coupons", {"code": f"eq.{coupon_code}"}, {"usedBy": new_used_by})
+        return True
+
+def secure_add_referral_commission(referrer_id, commission):
+    success = supabase_rpc("add_referral_commission", {"referrer_id": referrer_id, "commission": commission})
+    if success:
+        return True
+        
+    logger.info(f"[Security] rpc.add_referral_commission failed. Using python-locked fallback for referrer {referrer_id}.")
+    lock = get_user_lock(referrer_id)
+    with lock:
+        user_list = supabase_get("users", {"id": f"eq.{referrer_id}"})
+        if not user_list:
+            return False
+        user = user_list[0]
+        curr_ref_bal = float(user.get("referral_balance") or 0.0)
+        curr_ref_earn = float(user.get("total_referral_earnings") or 0.0)
+        
+        new_ref_bal = round(curr_ref_bal + commission, 2)
+        new_ref_earn = round(curr_ref_earn + commission, 2)
+        
+        supabase_patch("users", {"id": f"eq.{referrer_id}"}, {"referral_balance": new_ref_bal, "total_referral_earnings": new_ref_earn})
+        return True
+
 # --- SMM PROVIDER CALLER ---
 def call_smm_provider(action, **kwargs):
     payload = {
@@ -532,7 +645,7 @@ def smm_user_api():
         new_bal = round(user_bal - charge, 2)
         new_spent = round(float(user.get("totalSpent") or 0.0) + charge, 2)
         # Securely deduct client account balances via atomic RPC
-        success = supabase_rpc("decrement_balance", {"user_id": user_id, "amount": charge})
+        success = secure_decrement_balance(user_id, charge)
         if not success:
             return jsonify({"error": "Declined: Insufficient funds or database error."}), 200
 
@@ -782,7 +895,7 @@ def process_successful_payment(user_id, amount, payment_id, order_id=None, coupo
             if c_list:
                 c = c_list[0]
                 if c.get("isEnabled") and c.get("category") == "DEPOSIT" and float(amount) >= float(c.get("minAmount") or 0.0):
-                    coupon_applied = supabase_rpc("use_coupon", {"coupon_code": c.get("code"), "user_id": user_id})
+                    coupon_applied = secure_use_coupon(c.get("code"), user_id)
                     if coupon_applied:
                         coupon_applied_successfully = True
                         c_val = float(c.get("value") or 0.0)
@@ -823,7 +936,7 @@ def process_successful_payment(user_id, amount, payment_id, order_id=None, coupo
             }
             requests.post(f"{SUPABASE_URL}/rest/v1/transactions", headers=get_supabase_headers(), json=tx_payload, timeout=15)
             
-        supabase_rpc("increment_balance", {"user_id": user_id, "amount": total_credit})
+        secure_increment_balance(user_id, total_credit)
         supabase_patch("users", {"id": f"eq.{user_id}"}, {"lastPaymentAt": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())})
         
         logger.info(f"User {user_id} successfully credited {total_credit} INR.")
@@ -874,7 +987,7 @@ def sync_user():
                     config = config_data[0] if config_data else {}
                     if config.get("isReferralSystemEnabled") and float(config.get("referralSignupBonus") or 0.0) > 0:
                         bonus = float(config.get("referralSignupBonus"))
-                        supabase_rpc("increment_balance", {"user_id": user_id, "amount": bonus})
+                        secure_increment_balance(user_id, bonus)
                         tx_payload = {
                             "id": f"ref_sign_{int(time.time() * 1000)}",
                             "userId": user_id,
@@ -1109,7 +1222,7 @@ def place_order_endpoint():
             if final_cost < float(c.get("minAmount") or 0.0):
                 return jsonify({"error": f"Minimum amount required to use this coupon is {c.get('minAmount')} INR."}), 400
                 
-            coupon_applied = supabase_rpc("use_coupon", {"coupon_code": c.get("code"), "user_id": userId})
+            coupon_applied = secure_use_coupon(c.get("code"), userId)
             if not coupon_applied:
                 return jsonify({"error": "Coupon is invalid, expired, or has reached its usage limit."}), 400
                 
@@ -1122,12 +1235,9 @@ def place_order_endpoint():
             final_cost = max(0.0, final_cost)
             final_cost = round(final_cost, 2)
             
-        user_bal = float(user.get("balance") or 0.0)
-        if user_bal < final_cost:
+        deducted = secure_decrement_balance(userId, final_cost)
+        if not deducted:
             return jsonify({"error": "Insufficient balance."}), 400
-            
-        new_balance = round(user_bal - final_cost, 2)
-        supabase_patch("users", {"id": f"eq.{userId}"}, {"balance": new_balance})
         
         import random
         import string
@@ -1172,7 +1282,7 @@ def place_order_endpoint():
                 comm_pct = float(config.get("referral_commission_percent"))
                 commission = round((final_cost * comm_pct) / 100.0, 2)
                 if commission > 0.0:
-                    supabase_rpc("add_referral_commission", {"referrer_id": referred_by, "commission": commission})
+                    secure_add_referral_commission(referred_by, commission)
                     tx_ref_payload = {
                         "id": f"ref_com_{timestamp_ms}_{random.randint(100, 999)}",
                         "userId": referred_by,

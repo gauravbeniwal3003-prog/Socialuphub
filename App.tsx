@@ -119,13 +119,13 @@ const App: React.FC = () => {
   useEffect(() => {
     // Check maintenance mode on config change or user change
     if (config?.maintenanceMode) {
-        if (!user || user.role !== UserRole.ADMIN) {
+        if (!user || user.role !== UserRole.ADMIN || user.email !== 'gauravbeniwal30003@gmail.com') {
             setView('MAINTENANCE');
             return;
         }
     }
     
-    if (user && view === 'MAINTENANCE' && user.role === UserRole.ADMIN) {
+    if (user && view === 'MAINTENANCE' && user.role === UserRole.ADMIN && user.email === 'gauravbeniwal30003@gmail.com') {
         setView('DASHBOARD');
     }
   }, [config, user, view]);
@@ -491,12 +491,14 @@ const App: React.FC = () => {
     if (error) throw new Error(error.message);
     
     if (data.user && !data.session) {
-        throw new Error("Registration successful, but 'Confirm Email' is enabled in Supabase settings. Please disable it to allow instant login.");
+        return { verificationRequired: true };
     }
 
     if (data.user && refCode) {
         localStorage.setItem('pending_ref_code', refCode);
     }
+    
+    return { verificationRequired: false };
   };
 
   const logout = async () => { 
@@ -530,6 +532,7 @@ const App: React.FC = () => {
     const [refCode, setRefCode] = useState(''); // New State for Referral Code
     const [mode, setMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
     const [error, setError] = useState<EnhancedError | null>(null);
+    const [verificationMsg, setVerificationMsg] = useState('');
     const [loading, setLoading] = useState(false);
     const [showDiagnostics, setShowDiagnostics] = useState(false);
     const [isTestingBackend, setIsTestingBackend] = useState(false);
@@ -563,9 +566,9 @@ const App: React.FC = () => {
       } else if (lowerMsg.includes("mobile number already registered") || lowerMsg.includes("mobile_key")) {
         likelyCause = "This 10-digit mobile number is already connected to another registered account.";
         recommendation = "Try logging in using this mobile number instead, or use a different mobile number if you are registering a new account.";
-      } else if (lowerMsg.includes("confirm email") || lowerMsg.includes("email confirmation")) {
-        likelyCause = "Supabase Auth email confirmation is enabled on this project's dashboard, which prevents instant session creation.";
-        recommendation = "Please go to the Supabase Dashboard -> Authentication -> Providers -> Email and turn off 'Confirm Email' to allow immediate login and sync.";
+      } else if (lowerMsg.includes("confirm email") || lowerMsg.includes("email confirmation") || lowerMsg.includes("email not confirmed")) {
+        likelyCause = "Your email address has not been verified yet.";
+        recommendation = "Please check your email inbox (and spam folder) for a verification link to confirm your account before logging in.";
       } else if (lowerMsg.includes("user_already_exists") || lowerMsg.includes("user already exists")) {
         likelyCause = "An account with this email address has already been registered.";
         recommendation = "Switch to 'Login' mode and enter this email address with your password, or click Forgot Password if you need to reset it.";
@@ -684,10 +687,16 @@ const App: React.FC = () => {
     const handleSubmit = async (e: React.FormEvent) => {
       e.preventDefault(); 
       
-      setError(null); setLoading(true);
+      setError(null); setVerificationMsg(''); setLoading(true);
       try { 
           if (mode === 'REGISTER') {
-              await register(email, pass, name, mobile, refCode);
+              const res = await register(email, pass, name, mobile, refCode);
+              if (res?.verificationRequired) {
+                  setVerificationMsg("Registration successful! Please check your email to verify your account before logging in.");
+                  // Optionally switch to login mode so they can login after verifying
+                  setMode('LOGIN');
+                  setIdentifier(email);
+              }
           } else {
               await login(identifier, pass);
           }
@@ -721,6 +730,12 @@ const App: React.FC = () => {
                )}
                <input className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl p-3.5 text-[var(--app-text)] placeholder-[var(--app-text-muted)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)] outline-none transition-all text-sm font-medium" placeholder="Password" type="password" value={pass} onChange={e => setPass(e.target.value)} required />
                
+               {verificationMsg && (
+                   <div className="text-green-600 text-xs bg-green-50 dark:bg-green-950/20 p-3.5 rounded-xl border border-green-200 dark:border-green-900/40 font-bold text-center">
+                       {verificationMsg}
+                   </div>
+               )}
+
                {error && (
                   <div className="space-y-3">
                     {/* Simple error text banner */}
@@ -937,7 +952,7 @@ const App: React.FC = () => {
     if (view === 'LANDING') return <LandingPage onGetStarted={() => setView('AUTH')} />;
     if (view === 'AUTH') return <><LandingPage onGetStarted={() => {}} /><AuthModal /></>;
     if (view === 'BANNED') return <BannedScreen />;
-    return <Layout>{user?.role === UserRole.ADMIN ? <AdminPanel /> : <Dashboard />}</Layout>;
+    return <Layout>{user?.role === UserRole.ADMIN && user?.email === 'gauravbeniwal30003@gmail.com' ? <AdminPanel /> : <Dashboard />}</Layout>;
   };
 
   return (
