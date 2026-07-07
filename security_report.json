@@ -1,0 +1,35 @@
+{
+  "target": "http://localhost:3000",
+  "timestamp": "2026-07-07T13:24:07.234281",
+  "vulnerabilities_count": 1,
+  "vulnerabilities": [
+    {
+      "type": "Missing Security Headers",
+      "details": "Missing headers: x-frame-options, permissions-policy",
+      "severity": "Medium",
+      "url": "http://localhost:3000"
+    }
+  ],
+  "security_headers": {
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "content-security-policy": "default-src 'self';script-src 'self' 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com https://www.gstatic.com;style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;img-src 'self' data: https://* referrer;connect-src 'self' https://* wss://*;font-src 'self' https://fonts.gstatic.com;frame-src 'self' https://api.razorpay.com https://*.supabase.co;frame-ancestors 'self' https://ai.studio https://*.google.com;object-src 'none';upgrade-insecure-requests;base-uri 'self';form-action 'self';script-src-attr 'none'",
+    "x-frame-options": "MISSING",
+    "x-content-type-options": "nosniff",
+    "x-xss-protection": "0",
+    "referrer-policy": "no-referrer",
+    "permissions-policy": "MISSING"
+  },
+  "open_ports": [
+    {
+      "port": 3000,
+      "state": "open",
+      "service": "HTTP"
+    },
+    {
+      "port": 8080,
+      "state": "open",
+      "service": "HTTP"
+    }
+  ],
+  "ai_analysis": null
+}

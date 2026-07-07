@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Security Scan Report - localhost:3000</title>
+    <style>
+        body { font-family: sans-serif; background: #0f172a; color: #f1f5f9; padding: 20px; }
+        .card { background: #1e293b; padding: 25px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #334155; }
+        .badge { padding: 3px 10px; border-radius: 4px; font-weight: bold; font-size: 12px; }
+        .badge-critical { background: #ef4444; color: white; }
+        .badge-high { background: #f97316; color: white; }
+        .badge-medium { background: #eab308; color: black; }
+        .badge-low { background: #22c55e; color: white; }
+        h1, h2, h3 { color: #38bdf8; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #334155; }
+        th { background: #0f172a; }
+        pre { background: #090d16; padding: 15px; border-radius: 6px; overflow-x: auto; color: #38bdf8; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🔒 Security Scanner Pro Report</h1>
+        <p><strong>Target:</strong> http://localhost:3000</p>
+        <p><strong>Scan Date:</strong> 2026-07-07 13:24:07</p>
+    </div>
+    
+    <div class="card">
+        <h2>📊 Summary Statistics</h2>
+        <p>Total Vulnerabilities: <strong>1</strong></p>
+        <ul>
+            <li>Critical: <span class="badge badge-critical">0</span></li>
+            <li>High: <span class="badge badge-high">0</span></li>
+            <li>Medium: <span class="badge badge-medium">1</span></li>
+            <li>Low: <span class="badge badge-low">0</span></li>
+        </ul>
+    </div>
+    
+    <div class="card">
+        <h2>🔍 Vulnerability Findings</h2>
+        
+            <div style="border-bottom: 1px solid #334155; padding: 10px 0;">
+                <p><strong>Missing Security Headers</strong> <span class="badge badge-medium">Medium</span></p>
+                <p>Url: <code>http://localhost:3000</code></p>
+                
+                
+                <p>Details: Missing headers: x-frame-options, permissions-policy</p>
+            </div>
+            
+    </div>
+    
+    <div class="card">
+        <h2>🛡️ Security Headers Audit</h2>
+        <table>
+            <tr><th>Header</th><th>Status</th></tr>
+        <tr><td>strict-transport-security</td><td><span style='color: #22c55e;'>✓ max-age=31536000; includeSubDomains</span></td></tr><tr><td>content-security-policy</td><td><span style='color: #22c55e;'>✓ default-src 'self';script-src 'self' 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com https://www.gstatic.com;style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;img-src 'self' data: https://* referrer;connect-src 'self' https://* wss://*;font-src 'self' https://fonts.gstatic.com;frame-src 'self' https://api.razorpay.com https://*.supabase.co;frame-ancestors 'self' https://ai.studio https://*.google.com;object-src 'none';upgrade-insecure-requests;base-uri 'self';form-action 'self';script-src-attr 'none'</span></td></tr><tr><td>x-frame-options</td><td><span style='color: #ef4444;'>Missing</span></td></tr><tr><td>x-content-type-options</td><td><span style='color: #22c55e;'>✓ nosniff</span></td></tr><tr><td>x-xss-protection</td><td><span style='color: #22c55e;'>✓ 0</span></td></tr><tr><td>referrer-policy</td><td><span style='color: #22c55e;'>✓ no-referrer</span></td></tr><tr><td>permissions-policy</td><td><span style='color: #ef4444;'>Missing</span></td></tr>
+        </table>
+    </div>
+    
+    <div class="card">
+        <h2>🌐 Open Ports Discovery</h2>
+        <table>
+            <tr><th>Port</th><th>State</th><th>Service</th></tr>
+        <tr><td>3000</td><td>open</td><td>HTTP</td></tr><tr><td>8080</td><td>open</td><td>HTTP</td></tr>
+        </table>
+    </div>
+    
+    <div class="card">
+        <h2>🧠 AI Deep Forensic Analysis</h2>
+        <div><p>No AI analysis was executed.</p></div>
+    </div>
+</body>
+</html>

@@ -156,6 +156,14 @@ const App: React.FC = () => {
       } else {
         setView('DASHBOARD');
       }
+    } else {
+      // All other routes are considered public pages
+      if (!user) {
+        setView('LANDING');
+      } else {
+        setView('DASHBOARD');
+        navigate('/dashboard');
+      }
     }
   }, [location.pathname, user, authLoading, config?.maintenanceMode]);
 
