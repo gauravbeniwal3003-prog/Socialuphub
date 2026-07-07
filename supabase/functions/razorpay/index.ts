@@ -2,9 +2,9 @@
 // @ts-ignore
 declare const Deno: any;
 
-// HARDCODED CREDENTIALS
-const RAZORPAY_KEY_ID = "rzp_live_RzLdEkePrpnfd4";
-const RAZORPAY_KEY_SECRET = "4wiJs8mHjvhbes6JRZFd35hT"; 
+// HARDCODED CREDENTIALS (Replaced with secure environment variables)
+const RAZORPAY_KEY_ID = Deno.env.get("RAZORPAY_KEY_ID") || "";
+const RAZORPAY_KEY_SECRET = Deno.env.get("RAZORPAY_KEY_SECRET") || ""; 
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',

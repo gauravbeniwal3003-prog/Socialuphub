@@ -12,15 +12,15 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 # --- CONFIGURATION (Reads from Environment Variables) ---
-# Replace with your actual credentials or set them in Render Environment Panel
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+# Supports both SUPABASE_URL and VITE_SUPABASE_URL naming conventions
+SUPABASE_URL = os.environ.get("SUPABASE_URL") or os.environ.get("VITE_SUPABASE_URL") or ""
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("VITE_SUPABASE_ANON_KEY") or ""
 SMM_API_KEY = os.environ.get("SMM_API_KEY", "")
 SMM_API_URL = os.environ.get("SMM_API_URL", "https://safesmmpanel.com/api/v2")
 
 # Razorpay Keys
-RAZORPAY_KEY = os.environ.get("RAZORPAY_KEY", "rzp_test_rYf3Lq7C8W2oJn")
-RAZORPAY_SECRET = os.environ.get("RAZORPAY_SECRET", "4wiJs8mHjvhbes6JRZFd35hT")
+RAZORPAY_KEY = os.environ.get("RAZORPAY_KEY") or os.environ.get("RAZORPAY_KEY_ID") or ""
+RAZORPAY_SECRET = os.environ.get("RAZORPAY_SECRET") or os.environ.get("RAZORPAY_SECRET") or ""
 RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
 
 # Configure Logging

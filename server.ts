@@ -515,8 +515,8 @@ async function startServer() {
   // Initialize Razorpay lazily or safely
   let razorpay: any;
   try {
-    const rzpKey = process.env.RAZORPAY_KEY_ID || "rzp_live_RzLdEkePrpnfd4";
-    const rzpSecret = process.env.RAZORPAY_SECRET || "4wiJs8mHjvhbes6JRZFd35hT";
+    const rzpKey = process.env.RAZORPAY_KEY_ID || "";
+    const rzpSecret = process.env.RAZORPAY_SECRET || "";
     
     if (rzpKey && rzpSecret && !rzpKey.includes("TODO")) {
       razorpay = new Razorpay({
@@ -1972,7 +1972,7 @@ async function startServer() {
         }
 
         // 2. Compute and validate HMAC signature
-        const secret = process.env.RAZORPAY_SECRET || "4wiJs8mHjvhbes6JRZFd35hT";
+        const secret = process.env.RAZORPAY_SECRET || "";
         if (!secret) return res.status(500).json({ error: "Payment configuration error" });
 
         const generated_signature = crypto
