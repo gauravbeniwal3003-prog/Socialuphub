@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { ArrowRight, CheckCircle, Zap, Shield, TrendingUp, Users, PlayCircle, Lock, MousePointer, CreditCard, ChevronRight, Star } from 'lucide-react';
-import { Button, Card } from '../ui/Components';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { ArrowRight, CheckCircle, Zap, Shield, TrendingUp, Users, PlayCircle, Lock, MousePointer, CreditCard, ChevronRight, Star, Key, Code, Terminal, Layers, AlertTriangle } from 'lucide-react';
+import { Button, Card, Modal } from '../ui/Components';
 import { CONTACT_WHATSAPP_URL, INSTAGRAM_URL, CURRENCY_SYMBOL } from '../../constants';
 import { useStore, fetchServices, getConfig, getGlobalStats, calculateFinalPrice } from '../../services/mockStore';
 import { Service } from '../../types';
@@ -43,9 +44,21 @@ const AnimatedCounter = ({ value }: { value: number }) => {
 };
 
 const LandingPage: React.FC<LandingProps> = ({ onGetStarted }) => {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [scrolled, setScrolled] = useState(false);
   const { login, loginWithGoogle } = useAuth();
   
+  // URL-driven modal visibility for pristine shareability
+  const isTermsOpen = location.pathname.toLowerCase() === '/terms';
+  const isPrivacyOpen = location.pathname.toLowerCase() === '/privacy';
+  const isRefundOpen = location.pathname.toLowerCase() === '/refund-policy';
+  const isApiDocsOpen = location.pathname.toLowerCase() === '/api-docs';
+
+  const handleCloseModal = () => {
+    navigate('/');
+  };
+
   // Inline Auth states
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -69,6 +82,18 @@ const LandingPage: React.FC<LandingProps> = ({ onGetStarted }) => {
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  // Smooth scroll to services section when /services route is hit
+  useEffect(() => {
+    if (location.pathname.toLowerCase() === '/services') {
+      setTimeout(() => {
+        const el = document.getElementById('services');
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 200); // Small timeout to ensure page content rendering completes
+    }
+  }, [location.pathname]);
 
   // Fetch Stats Efficiently
   useEffect(() => {
@@ -535,19 +560,19 @@ const LandingPage: React.FC<LandingProps> = ({ onGetStarted }) => {
             </div>
             <div>
               <h4 className="font-extrabold mb-4 text-[var(--app-text)] uppercase tracking-wider text-xs font-sans">Quick Links</h4>
-              <ul className="space-y-2 text-xs text-[var(--app-text-muted)] font-medium">
-                <li><a href="#" className="hover:text-[var(--app-accent)] transition-colors">Home</a></li>
-                <li><a href="#services" className="hover:text-[var(--app-accent)] transition-colors">Services Rate Sheet</a></li>
-                <li><button onClick={onGetStarted} className="hover:text-[var(--app-accent)] transition-colors">Login Workspace</button></li>
+              <ul className="space-y-2 text-xs text-[var(--app-text-muted)] font-medium flex flex-col items-start">
+                <li><button onClick={() => navigate('/')} className="hover:text-[var(--app-accent)] transition-colors cursor-pointer text-left font-medium">Home</button></li>
+                <li><button onClick={() => navigate('/services')} className="hover:text-[var(--app-accent)] transition-colors cursor-pointer text-left font-medium">Services Rate Sheet</button></li>
+                <li><button onClick={onGetStarted} className="hover:text-[var(--app-accent)] transition-colors cursor-pointer text-left font-medium">Login Workspace</button></li>
               </ul>
             </div>
             <div>
               <h4 className="font-extrabold mb-4 text-[var(--app-text)] uppercase tracking-wider text-xs font-sans">Corporate Legal</h4>
-              <ul className="space-y-2 text-xs text-[var(--app-text-muted)] font-medium">
-                <li><a href="#" className="hover:text-[var(--app-accent)] transition-colors">Terms of Service</a></li>
-                <li><a href="#" className="hover:text-[var(--app-accent)] transition-colors">Privacy Shield Policy</a></li>
-                <li><a href="#" className="hover:text-[var(--app-accent)] transition-colors">Refund Regulations</a></li>
-                <li><a href="#" className="hover:text-[var(--app-accent)] transition-colors">API Endpoint Specs</a></li>
+              <ul className="space-y-2 text-xs text-[var(--app-text-muted)] font-medium flex flex-col items-start">
+                <li><button onClick={() => navigate('/terms')} className="hover:text-[var(--app-accent)] transition-colors cursor-pointer text-left font-medium">Terms of Service</button></li>
+                <li><button onClick={() => navigate('/privacy')} className="hover:text-[var(--app-accent)] transition-colors cursor-pointer text-left font-medium">Privacy Shield Policy</button></li>
+                <li><button onClick={() => navigate('/refund-policy')} className="hover:text-[var(--app-accent)] transition-colors cursor-pointer text-left font-medium">Refund Regulations</button></li>
+                <li><button onClick={() => navigate('/api-docs')} className="hover:text-[var(--app-accent)] transition-colors cursor-pointer text-left font-medium">API Endpoint Specs</button></li>
               </ul>
             </div>
           </div>
@@ -557,6 +582,113 @@ const LandingPage: React.FC<LandingProps> = ({ onGetStarted }) => {
           </div>
         </div>
       </footer>
+
+      {/* --- CORPORATE LEGAL MODALS (URL-driven routing) --- */}
+      <Modal isOpen={isTermsOpen} onClose={handleCloseModal} title="Terms of Service (ToS)">
+        <div className="space-y-4 text-xs md:text-sm leading-relaxed text-[var(--app-text-muted)] font-medium">
+          <p className="text-[var(--app-text)] font-extrabold text-base mb-2">Platform Master Agreement</p>
+          <p>By registering or logging in to Social Up Hub, you declare full compliance with our Terms. SMM services are automated signals designed solely for visibility and engagement expansion.</p>
+          <div className="space-y-3">
+            <div>
+              <h4 className="font-bold text-[var(--app-text)] uppercase tracking-wider text-xs flex items-center gap-1.5"><Shield className="w-3.5 h-3.5 text-[var(--app-accent)]" /> 1. Network Constraints</h4>
+              <p className="mt-1">We are not liable for account suspensions, shadowing, or content adjustments made by social platforms (Instagram, YouTube, etc.). All operations carry baseline industry risk.</p>
+            </div>
+            <div>
+              <h4 className="font-bold text-[var(--app-text)] uppercase tracking-wider text-xs flex items-center gap-1.5"><Zap className="w-3.5 h-3.5 text-[var(--app-accent)]" /> 2. Pipeline Integrity</h4>
+              <p className="mt-1">Orders route through dynamic API channels. Although delivery is prompt, delays during core network updates can happen. No retention guarantee is implied unless specified.</p>
+            </div>
+            <div>
+              <h4 className="font-bold text-[var(--app-text)] uppercase tracking-wider text-xs flex items-center gap-1.5"><Lock className="w-3.5 h-3.5 text-[var(--app-accent)]" /> 3. Exploits & Security</h4>
+              <p className="mt-1">Any coordinate spamming, multi-accounting, payment manipulation, or API bypass attempts will result in an immediate, irrevocable ban and forfeiture of wallet balance.</p>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={isPrivacyOpen} onClose={handleCloseModal} title="Privacy Shield Policy">
+        <div className="space-y-4 text-xs md:text-sm leading-relaxed text-[var(--app-text-muted)] font-medium">
+          <p className="text-[var(--app-text)] font-extrabold text-base mb-2">Secure User Information Protection</p>
+          <p>Your privacy is protected by active security headers, network encryption, and data shields. We never sell, rent, or lease platform logs to external marketers.</p>
+          <div className="space-y-3">
+            <div>
+              <h4 className="font-bold text-[var(--app-text)] uppercase tracking-wider text-xs flex items-center gap-1.5"><CheckCircle className="w-3.5 h-3.5 text-[var(--app-accent)]" /> 1. Collected Information</h4>
+              <p className="mt-1">We request your name, email, and mobile number strictly to maintain account credentials, prevent sybil attacks, and synchronize API integrations.</p>
+            </div>
+            <div>
+              <h4 className="font-bold text-[var(--app-text)] uppercase tracking-wider text-xs flex items-center gap-1.5"><CreditCard className="w-3.5 h-3.5 text-[var(--app-accent)]" /> 2. Payment Encryption</h4>
+              <p className="mt-1">All gateway payments (INR) are handled using modern, industry-standard 256-bit AES encryption through Razorpay. We do not store credit cards or banking secrets on our servers.</p>
+            </div>
+            <div>
+              <h4 className="font-bold text-[var(--app-text)] uppercase tracking-wider text-xs flex items-center gap-1.5"><Lock className="w-3.5 h-3.5 text-[var(--app-accent)]" /> 3. Cookie Consistency</h4>
+              <p className="mt-1">Standard session cookies are generated solely to sustain your authentication state across public and private dashboard routes, preventing repeated login queries.</p>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={isRefundOpen} onClose={handleCloseModal} title="Refund Regulations">
+        <div className="space-y-4 text-xs md:text-sm leading-relaxed text-[var(--app-text-muted)] font-medium">
+          <p className="text-[var(--app-text)] font-extrabold text-base mb-2">Financial Dispute & Refund Clauses</p>
+          <p>Please read these regulations carefully before topping up your workspace balance. Adding funds constitutes complete agreement to these terms.</p>
+          <div className="space-y-3">
+            <div>
+              <h4 className="font-bold text-[var(--app-text)] uppercase tracking-wider text-xs flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5 text-red-500" /> 1. No External Chargebacks</h4>
+              <p className="mt-1">All added funds are final. No cash-outs, bank transfers, or card reversals are issued. Disputed charges or false banking claims will lead to instant account closure.</p>
+            </div>
+            <div>
+              <h4 className="font-bold text-[var(--app-text)] uppercase tracking-wider text-xs flex items-center gap-1.5"><CheckCircle className="w-3.5 h-3.5 text-[var(--app-accent)]" /> 2. Automatic Wallet Returns</h4>
+              <p className="mt-1">If an order is cancelled, partial, or fails due to network issues, the system will automatically refund the exact INR balance back to your internal platform wallet instantly.</p>
+            </div>
+            <div>
+              <h4 className="font-bold text-[var(--app-text)] uppercase tracking-wider text-xs flex items-center gap-1.5"><Users className="w-3.5 h-3.5 text-[var(--app-accent)]" /> 3. Support Resolution</h4>
+              <p className="mt-1">For any transaction discrepancies or billing issues, please contact our 24/7 WhatsApp customer helpdesk within 48 hours with payment receipt numbers for fast assistance.</p>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={isApiDocsOpen} onClose={handleCloseModal} title="Public API Specifications">
+        <div className="space-y-4 text-xs md:text-sm leading-relaxed text-[var(--app-text-muted)] font-medium">
+          <p className="text-[var(--app-text)] font-extrabold text-base mb-1">Developer API Integration</p>
+          <p>Automate your client portals or backend systems using our ultra-fast high-retention REST API pipelines.</p>
+          
+          <div className="bg-[var(--app-input-bg)] p-3.5 rounded-xl border border-[var(--app-border)] font-mono text-xs overflow-x-auto space-y-1">
+            <div className="text-[var(--app-text)] font-bold">API Base Endpoint URL:</div>
+            <div className="text-[var(--app-accent)] select-all truncate font-bold">https://socialuphub.in/api/v2</div>
+          </div>
+
+          <div className="space-y-3">
+            <div>
+              <h4 className="font-bold text-[var(--app-text)] uppercase tracking-wider text-xs flex items-center gap-1.5"><Terminal className="w-3.5 h-3.5 text-[var(--app-accent)]" /> Required Query Params</h4>
+              <ul className="list-disc list-inside mt-1 space-y-1 pl-1">
+                <li><code className="font-bold font-mono">key</code>: Your account's unique master API key.</li>
+                <li><code className="font-bold font-mono">action</code>: Desired operation (<code className="font-mono">balance</code>, <code className="font-mono">services</code>, <code className="font-mono">add</code>, <code className="font-mono">status</code>).</li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="font-bold text-[var(--app-text)] uppercase tracking-wider text-xs flex items-center gap-1.5"><Layers className="w-3.5 h-3.5 text-[var(--app-accent)]" /> Available Operations</h4>
+              <div className="mt-1.5 space-y-1.5 pl-1">
+                <div className="border-l-2 border-[var(--app-accent)]/40 pl-2">
+                  <p className="font-bold text-[var(--app-text)] text-[11px] font-mono">action: "balance"</p>
+                  <p className="text-[11px]">Returns current account balance in INR. (Format: <code className="font-mono">{"{ \"balance\": \"150.25\" }"}</code>)</p>
+                </div>
+                <div className="border-l-2 border-[var(--app-accent)]/40 pl-2">
+                  <p className="font-bold text-[var(--app-text)] text-[11px] font-mono">action: "services"</p>
+                  <p className="text-[11px]">Returns list of SMM services with categories, minimum values, rates, and IDs.</p>
+                </div>
+                <div className="border-l-2 border-[var(--app-accent)]/40 pl-2">
+                  <p className="font-bold text-[var(--app-text)] text-[11px] font-mono">action: "add"</p>
+                  <p className="text-[11px]">Creates a new automated SMM order. Mandatory parameters: <code className="font-mono">service</code>, <code className="font-mono">link</code>, <code className="font-mono">quantity</code>.</p>
+                </div>
+                <div className="border-l-2 border-[var(--app-accent)]/40 pl-2">
+                  <p className="font-bold text-[var(--app-text)] text-[11px] font-mono">action: "status"</p>
+                  <p className="text-[11px]">Checks order delivery state. Mandatory parameter: <code className="font-mono">order</code> (Order ID).</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

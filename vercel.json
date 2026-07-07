@@ -37,7 +37,7 @@
       "destination": "https://socialuphub-backend.onrender.com/api/:path*"
     },
     {
-      "source": "/:path*",
+      "source": "/((?!api).*)",
       "destination": "/index.html"
     }
   ]

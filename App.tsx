@@ -130,13 +130,20 @@ const App: React.FC = () => {
       }
     }
 
-    if (path === '/login' || path === '/signin' || path === '/auth' || path === '/register' || path === '/signup') {
+    const publicPaths = ['/services', '/terms', '/privacy', '/refund-policy', '/api-docs'];
+    const authPaths = ['/login', '/signin', '/auth', '/register', '/signup'];
+
+    if (authPaths.includes(path)) {
       if (!user) {
         setView('AUTH');
       } else {
         setView('DASHBOARD');
         // Redirect to dashboard subpage if they had one, else default dashboard
-        if (!location.pathname.startsWith('/dashboard') && !location.pathname.startsWith('/admin')) {
+        const redirectUrl = localStorage.getItem('redirect_after_login');
+        if (redirectUrl && (redirectUrl.startsWith('/dashboard') || redirectUrl.startsWith('/admin'))) {
+          localStorage.removeItem('redirect_after_login');
+          navigate(redirectUrl);
+        } else {
           navigate('/dashboard');
         }
       }
@@ -147,6 +154,9 @@ const App: React.FC = () => {
         setView('DASHBOARD');
         navigate('/dashboard');
       }
+    } else if (publicPaths.includes(path)) {
+      // Public pages are accessible to both logged-in and non-logged-in users!
+      setView('LANDING');
     } else if (path.startsWith('/dashboard') || path.startsWith('/admin')) {
       if (!user) {
         setView('AUTH');
@@ -157,7 +167,7 @@ const App: React.FC = () => {
         setView('DASHBOARD');
       }
     } else {
-      // All other routes are considered public pages
+      // All other routes are considered public pages or fallback to landing
       if (!user) {
         setView('LANDING');
       } else {
