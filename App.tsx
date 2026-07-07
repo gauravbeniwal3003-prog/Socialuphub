@@ -2,6 +2,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import Layout from './components/Layout';
+import { SecurityTracker } from './components/SecurityTracker';
 import LandingPage from './components/landing/LandingPage';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { AdminPanel } from './components/admin/AdminPanel';
@@ -109,10 +110,7 @@ const App: React.FC = () => {
   const config = useStore('suh_config', getConfig);
 
   const checkBanStatus = (userData: User) => {
-      if (userData.isBanned) {
-          if (!userData.banExpires) return 'PERMANENT';
-          if (Date.now() < new Date(userData.banExpires).getTime()) return 'TEMP';
-      }
+      // Auto-ban system disabled as requested
       return 'ALLOWED';
   };
 
@@ -365,6 +363,11 @@ const App: React.FC = () => {
   };
 
   const register = async (email: string, pass: string, name: string, mobile: string, refCode?: string) => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail.endsWith("@gmail.com")) {
+      throw new Error("Only @gmail.com email addresses are allowed to register.");
+    }
+    
     if (!/^\d{10}$/.test(mobile)) throw new Error("Please enter a valid 10-digit mobile number.");
     
     // Check uniqueness client-side first to avoid DB error spam
@@ -855,6 +858,8 @@ const App: React.FC = () => {
     <AuthContext.Provider value={{ user, login, loginWithGoogle, register, logout }}>
       <ScrollToTop />
       <DynamicTheme config={config} />
+      <SecurityTracker intruderHint="App Loaded" />
+      <SecurityTracker intruderHint="App Loaded" />
       <CurrentView />
     </AuthContext.Provider>
   );

@@ -1,5 +1,6 @@
 {
   "name": "SocialUpHub",
   "description": "SMM Panel",
+  "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

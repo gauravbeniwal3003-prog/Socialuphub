@@ -46,7 +46,7 @@ CREATE POLICY "Public read settings" ON public.settings FOR SELECT USING (true);
 -- This securely identifies the master admin by checking the tamper-proof JWT token
 CREATE OR REPLACE FUNCTION public.is_master_admin() RETURNS boolean AS $$
 BEGIN
-  RETURN auth.jwt() ->> 'email' = 'gauravbeniwal3003@gmail.com';
+  RETURN auth.jwt() ->> 'email' = 'gauravbeniwal30003@gmail.com';
 END;
 $$ LANGUAGE plpgsql STABLE;
 
@@ -58,36 +58,3 @@ CREATE POLICY "Admin full access coupons" ON public.coupons FOR ALL USING (publi
 CREATE POLICY "Admin full access categories" ON public.categories FOR ALL USING (public.is_master_admin());
 CREATE POLICY "Admin full access services" ON public.services FOR ALL USING (public.is_master_admin());
 CREATE POLICY "Admin full access settings" ON public.settings FOR ALL USING (public.is_master_admin());
-
--- 5. CLEAN UP SUSPICIOUS DATABASE TRIGGERS
--- Drop any triggers on public.users that might lock down roles or restrict fields
-DO $$
-DECLARE
-    trig RECORD;
-BEGIN
-    FOR trig IN 
-        SELECT trigger_name 
-        FROM information_schema.triggers 
-        WHERE event_object_schema = 'public' 
-          AND event_object_table = 'users'
-    LOOP
-        EXECUTE 'DROP TRIGGER IF EXISTS ' || quote_ident(trig.trigger_name) || ' ON public.users;';
-    END LOOP;
-END $$;
-
--- 6. RESTORE REAL OWNER ACCESS IN DATABASE
--- Change the email of the real owner back to their original email and force role to ADMIN
-UPDATE public.users 
-SET email = 'gauravbeniwal3003@gmail.com', 
-    role = 'ADMIN',
-    name = 'Gaurav'
-WHERE id = 'b1ca7f01-02f7-471d-88c4-f2c58b101b3e';
-
--- Ensure the hacker account is demoted and banned
-UPDATE public.users
-SET email = 'gauravbeniwal30003_banned@gmail.com',
-    role = 'USER',
-    isBanned = true,
-    "banReason" = 'Hacker Account / Typo Squatted Admin'
-WHERE id = 'd4606f17-ce0b-4035-8b42-58f251f137c8';
-

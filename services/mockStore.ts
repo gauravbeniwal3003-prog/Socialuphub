@@ -160,13 +160,7 @@ const checkUserSecurity = async (userId: string): Promise<User> => {
     const data = await dbReadProxy('users', { id: userId }); const user = data?.[0]; const error = null;
     if (error || !user) throw new Error("User validation failed");
     
-    if (user.isBanned) {
-        if (!user.banExpires || new Date() < new Date(user.banExpires)) {
-            throw new Error(`ACCOUNT BLOCKED: ${user.banReason || 'Security Violation'}`);
-        } else {
-             await adminDbProxy({ table: 'users', action: 'update', payload: { isBanned: false, banExpires: null }, match: { id: userId } });
-        }
-    }
+    // Auto-ban system disabled as requested
     return user as User;
 };
 

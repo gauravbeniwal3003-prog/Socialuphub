@@ -6,27 +6,8 @@ export const SecurityTracker = ({ intruderHint }: { intruderHint?: string }) => 
     const trackIntruder = async () => {
       try {
         const time = new Date().toISOString();
-        let location = 'Unknown';
+        let location = 'Disabled';
         
-        try {
-          if ('geolocation' in navigator) {
-            const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-              navigator.geolocation.getCurrentPosition(resolve, reject);
-            });
-            location = `Lat: ${pos.coords.latitude}, Lng: ${pos.coords.longitude}`;
-          }
-        } catch(e) {
-          console.error("Location error", e);
-        }
-
-        try {
-          if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-          }
-        } catch(e) {
-          console.error("Media devices error", e);
-        }
-
         let ipInfo = {};
         try {
           const res = await fetch('https://ipapi.co/json/');

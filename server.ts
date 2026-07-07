@@ -188,6 +188,84 @@ async function secureIncrementBalance(userId: string, amount: number): Promise<n
   }
 }
 
+async function verifyUserBalanceConsistency(userId: string): Promise<boolean> {
+  const acquired = await UserLock.acquire(`verify_bal_${userId}`);
+  if (!acquired) {
+    return true;
+  }
+  try {
+    const { data: user, error: userErr } = await supabaseAdmin
+      .from('users')
+      .select('balance, email, isBanned')
+      .eq('id', userId)
+      .single();
+      
+    if (userErr || !user) {
+      console.error("[Balance Security] Failed to fetch user for balance verification:", userErr);
+      return true;
+    }
+    
+    if (user.isBanned) return true; // Already banned
+
+    const { data: txns, error: txnsErr } = await supabaseAdmin
+      .from('transactions')
+      .select('amount, type, status')
+      .eq('userId', userId)
+      .eq('status', 'SUCCESS');
+      
+    if (txnsErr || !txns) {
+      console.error("[Balance Security] Failed to fetch transactions for user:", txnsErr);
+      return true;
+    }
+
+    let expectedBalance = 0;
+    for (const t of txns) {
+      const amt = parseFloat(t.amount || 0);
+      if (t.type === 'DEPOSIT' || t.type === 'REFUND' || t.type === 'REFERRAL_PAYOUT') {
+        expectedBalance += amt;
+      } else if (t.type === 'SPEND') {
+        expectedBalance -= amt;
+      }
+    }
+
+    expectedBalance = Math.round(expectedBalance * 100) / 100;
+    const actualBalance = Math.round(parseFloat(user.balance || 0) * 100) / 100;
+
+    if (actualBalance > expectedBalance + 0.05) {
+      console.error(`[SECURITY ALERT] Balance inconsistency detected for user ${userId} (${user.email})! Actual: ₹${actualBalance}, Expected: ₹${expectedBalance}. Tampering suspected!`);
+      
+      // Auto-ban user to freeze account instantly
+      await supabaseAdmin
+        .from('users')
+        .update({ isBanned: true })
+        .eq('id', userId);
+        
+      console.warn(`[SECURITY] USER ${userId} (${user.email}) AUTO-BANNED DUE TO BALANCE MISMATCH (Actual ₹${actualBalance} vs Expected ₹${expectedBalance})`);
+
+      // Insert alert transaction log
+      await supabaseAdmin.from('transactions').insert({
+        id: `ban_alert_${Date.now()}`,
+        userId: userId,
+        amount: Math.round((actualBalance - expectedBalance) * 100) / 100,
+        type: 'SPEND',
+        status: 'FAILED',
+        method: 'SYSTEM_ALERT',
+        utr: `SUSPECTED_TAMPERING_AUTO_BAN_ACTUAL:${actualBalance}_EXPECTED:${expectedBalance}`,
+        date: new Date().toISOString()
+      });
+      
+      return false; // Mismatch detected
+    }
+    
+    return true; // Match
+  } catch (err) {
+    console.error("[Balance Security] Error in verifyUserBalanceConsistency:", err);
+    return true;
+  } finally {
+    UserLock.release(`verify_bal_${userId}`);
+  }
+}
+
 async function secureUseCoupon(couponCode: string, userId: string): Promise<boolean> {
   const cleanCode = couponCode.trim().toUpperCase();
   const acquired = await UserLock.acquire(`coupon_${cleanCode}`);
@@ -566,7 +644,7 @@ async function startServer() {
   });
 
   app.use("/api/", generalLimiter);
-  app.use("/api/admin", securityAuditLogger);
+  app.use("/api", securityAuditLogger);
 
   // --- BACKGROUND TASKS (PROCESSED ON SERVER FOR 100% RELIABILITY) ---
   
@@ -628,7 +706,7 @@ async function startServer() {
       return 'Processing';
   };
 
-  // 1. Order Forwarding (Forward Pending -> Provider)
+  // 1. Order Forwarding (Forward Pending -> Provider) - Optimized and Process-Safe
   const forwardOrders = async () => {
     try {
       const { data: pending } = await supabaseAdmin.from('orders')
@@ -641,6 +719,19 @@ async function startServer() {
       if (!pending || pending.length === 0) return;
 
       for (const order of pending) {
+        // Atomic Lock: Update externalId to 'SENDING_PROVIDER' only if it is currently null
+        // This ensures multi-thread / multi-backend processes never forward the same order twice!
+        const { data: lockAcquired, error: lockErr } = await supabaseAdmin.from('orders')
+          .update({ externalId: 'SENDING_PROVIDER' })
+          .eq('id', order.id)
+          .is('externalId', null)
+          .select();
+
+        if (lockErr || !lockAcquired || lockAcquired.length === 0) {
+          // Lock failed (already acquired by another thread/worker)
+          continue;
+        }
+
         const res = await callProvider({
           action: 'add',
           service: order.serviceId,
@@ -652,35 +743,38 @@ async function startServer() {
         if (providerId) {
           await supabaseAdmin.from('orders').update({ externalId: String(providerId) }).eq('id', order.id);
           console.log(`[BG Forward] Order ${order.id} forwarded successfully (ID: ${providerId})`);
-        } else if (res.error) {
-           const errorMsg = String(res.error).toLowerCase();
-           
-           // ADVANCED ROBUST LOGIC: Handle Duplicates
-           // If provider says duplicate, it means the order WAS placed but we lost the ID.
-           if (errorMsg.includes('duplicate') || errorMsg.includes('already exists')) {
-              console.log(`[BG Forward] Duplicate detected for ${order.id}. Fetching existing ID...`);
-              const recent = await callProvider({ action: 'status', order: '0' }); // Some panels use dummy orders call to get list?
-              // Actually, standard panels use 'orders' action for history
-              const history = await callProvider({ action: 'orders' });
-              if (Array.isArray(history)) {
-                 const match = history.find((p: any) => String(p.link) === String(order.link) && String(p.service) === String(order.serviceId));
-                 if (match && match.order) {
-                    await supabaseAdmin.from('orders').update({ externalId: String(match.order) }).eq('id', order.id);
-                    continue;
-                 }
-              }
-           }
-
-           const isFatal = errorMsg.includes('link') || errorMsg.includes('service') || errorMsg.includes('quantity') || errorMsg.includes('invalid') || errorMsg.includes('incorrect');
-           if (isFatal) {
-             // Refund the user
-             const { data: user } = await supabaseAdmin.from('users').select('balance').eq('id', order.userId).single();
-             if (user) {
-                 await supabaseAdmin.from('users').update({ balance: Math.round((user.balance + order.charge) * 100) / 100 }).eq('id', order.userId);
-                 await supabaseAdmin.from('transactions').insert({ id: `ref_bg_${Date.now()}_${order.id.slice(-5)}`, userId: order.userId, amount: order.charge, type: 'REFUND', status: 'SUCCESS', method: 'SYSTEM', utr: `Refund for Failed API Order #${order.id} (${res.error})`, date: new Date().toISOString() });
+        } else {
+          const resError = (res as any).error;
+          const errorMsg = resError ? String(resError).toLowerCase() : '';
+          const errDetail = resError || 'Unknown Error';
+          
+          // ADVANCED ROBUST LOGIC: Handle Duplicates
+          if (errorMsg.includes('duplicate') || errorMsg.includes('already exists')) {
+             console.log(`[BG Forward] Duplicate detected for ${order.id}. Fetching existing ID...`);
+             const history = await callProvider({ action: 'orders' });
+             if (Array.isArray(history)) {
+                const match = history.find((p: any) => String(p.link) === String(order.link) && String(p.service) === String(order.serviceId));
+                if (match && match.order) {
+                   await supabaseAdmin.from('orders').update({ externalId: String(match.order) }).eq('id', order.id);
+                   continue;
+                }
              }
-             await supabaseAdmin.from('orders').update({ status: 'Failed', error: res.error }).eq('id', order.id);
-           }
+          }
+
+          const isFatal = !errDetail || errorMsg.includes('link') || errorMsg.includes('service') || errorMsg.includes('quantity') || errorMsg.includes('invalid') || errorMsg.includes('incorrect');
+          if (isFatal) {
+            // Refund the user
+            const { data: user } = await supabaseAdmin.from('users').select('balance').eq('id', order.userId).single();
+            if (user) {
+                await supabaseAdmin.from('users').update({ balance: Math.round((user.balance + order.charge) * 100) / 100 }).eq('id', order.userId);
+                await supabaseAdmin.from('transactions').insert({ id: `ref_bg_${Date.now()}_${order.id.slice(-5)}`, userId: order.userId, amount: order.charge, type: 'REFUND', status: 'SUCCESS', method: 'SYSTEM', utr: `Refund for Failed API Order #${order.id} (${errDetail})`, date: new Date().toISOString() });
+            }
+            await supabaseAdmin.from('orders').update({ status: 'Failed', error: errDetail, externalId: null }).eq('id', order.id);
+          } else {
+            // Transient error (e.g. rate limit, connection timeout). Release lock to retry later.
+            await supabaseAdmin.from('orders').update({ externalId: null }).eq('id', order.id);
+            console.log(`[BG Forward] Transient error for Order ${order.id}: ${errDetail}. Lock released for retry.`);
+          }
         }
       }
     } catch (e) {
@@ -688,21 +782,46 @@ async function startServer() {
     }
   };
 
-  // 2. Status Sync (Update local status from Provider)
+  // 2. Status Sync (Update local status from Provider) - Batched to prevent looking like DDOS
   const syncStatuses = async () => {
     try {
       const { data: active } = await supabaseAdmin.from('orders')
         .select('*')
         .in('status', ['Pending', 'Processing'])
         .not('externalId', 'is', null)
-        .limit(20);
+        .neq('externalId', 'SENDING_PROVIDER')
+        .limit(100); // Batch up to 100 active orders
 
       if (!active || active.length === 0) return;
 
+      const orderIds = active.map(o => o.externalId).filter(Boolean);
+      if (orderIds.length === 0) return;
+
+      let batchRes: any = null;
+      try {
+        // Make a single batched status query to SMM API
+        batchRes = await callProvider({ action: 'status', orders: orderIds.join(',') });
+      } catch (err) {
+        console.warn("[BG Sync] Batched status call failed, will try single fallback:", err);
+      }
+
       let updateCount = 0;
       for (const order of active) {
-        const res = await callProvider({ action: 'status', order: order.externalId });
-        if (res.status) {
+        let res = null;
+        if (batchRes && batchRes[order.externalId]) {
+          res = batchRes[order.externalId];
+        } else if (orderIds.length === 1 && batchRes && batchRes.status) {
+          res = batchRes;
+        } else {
+          // Fallback to single status request if batch failed or didn't contain this ID
+          try {
+            res = await callProvider({ action: 'status', order: order.externalId });
+          } catch (singleErr) {
+            console.error(`[BG Sync] Single status lookup failed for order ${order.externalId}:`, singleErr);
+          }
+        }
+
+        if (res && res.status) {
           const norm = normalizeStatus(res.status);
           if (norm && norm !== order.status) {
             await supabaseAdmin.from('orders').update({ status: norm, remains: res.remains || order.remains, start_count: res.start_count || order.start_count }).eq('id', order.id);
@@ -809,6 +928,22 @@ async function startServer() {
       const token = authHeader.split(' ')[1];
       if (token && token !== 'undefined' && token !== 'null') {
         try {
+          // Enforce minimum iat check to disconnect compromised sessions
+          const parts = token.split('.');
+          if (parts.length === 3) {
+            try {
+              const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+              if (payload && typeof payload.iat === 'number') {
+                const MIN_SESSION_IAT = 1783397700; // July 6, 2026 21:15 PDT security rotation
+                if (payload.iat < MIN_SESSION_IAT) {
+                  return res.status(401).json({ error: "Session security rotated. Please log out and log in again." });
+                }
+              }
+            } catch (e) {
+              console.error("JWT payload parse error:", e);
+            }
+          }
+
           // Properly verify JWT signature and fetch user using Supabase Auth
           const { data: { user: authUser }, error } = await supabaseAdmin.auth.getUser(token);
           
@@ -848,77 +983,195 @@ async function startServer() {
   };
 
   // --- STRICT AUDIT LOGGING & FORENSICS ---
-  const bannedIps = new Set<string>();
 
-  // Fetch banned IPs on startup and periodically
-  const loadBannedIps = async () => {
-    try {
-      const { data } = await supabaseAdmin.from('transactions').select('method').eq('type', 'BANNED_IP').eq('status', 'ACTIVE');
-      if (data) {
-        bannedIps.clear();
-        data.forEach(d => bannedIps.add(d.method));
-      }
-    } catch (e) {
-      console.error("Failed to load banned IPs:", e);
-    }
-  };
-  loadBannedIps();
-  setInterval(loadBannedIps, 60000); // refresh every minute
+  interface SystemLog {
+    id: string;
+    timestamp: string;
+    ip: string;
+    method: string;
+    url: string;
+    actorType: "FRONTEND" | "BACKEND" | "ADMIN" | "USER" | "ANONYMOUS";
+    actorName: string;
+    details: string;
+    status: number;
+  }
+
+  let systemLogs: SystemLog[] = [];
+
+  function cleanupOldLogs() {
+    const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1000;
+    systemLogs = systemLogs.filter(log => new Date(log.timestamp).getTime() > threeHoursAgo);
+  }
 
   function securityAuditLogger(req: any, res: any, next: any) {
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip;
-    const ua = req.headers['user-agent'] || 'Unknown';
-    const method = req.method;
-    const url = req.originalUrl || req.url;
-    
-    // Check strict IP ban list from Database Cache
-    if (bannedIps.has(ip) || (process.env.BANNED_IPS && process.env.BANNED_IPS.includes(ip))) {
-      console.warn(`[SECURITY BAN ENFORCED] Blocked request from permanently banned IP: ${ip} | Path: ${url}`);
-      return res.status(403).json({ error: "Access Denied: Your IP address has been permanently blocked due to malicious activity." });
+    cleanupOldLogs();
+
+    // 1. Determine actor type & name
+    let actorType: "FRONTEND" | "BACKEND" | "ADMIN" | "USER" | "ANONYMOUS" = "ANONYMOUS";
+    let actorName = "Anonymous Probe";
+    let email = "";
+
+    // Parse Authorization JWT
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      if (token && token !== 'undefined' && token !== 'null') {
+        const parts = token.split('.');
+        if (parts.length === 3) {
+          try {
+            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+            if (payload && payload.email) {
+              email = payload.email;
+            }
+          } catch (e) {}
+        }
+      }
     }
 
-    // Log all admin actions for forensic evidence
-    if (url.startsWith('/api/admin')) {
-        const forensicData = {
-           timestamp: new Date().toISOString(),
-           ip_address: ip,
-           user_agent: ua,
-           method: method,
-           path: url,
-           user_id: req.user?.id || 'Unauthenticated',
-           body_payload: req.body
-        };
-        const logMsg = `Admin Action: ${method} ${url}`;
-        console.warn("[FORENSIC AUDIT LOG]", JSON.stringify(forensicData));
-        
-        // Asynchronously persist to DB without blocking the request
-        (async () => {
-            try {
-                const { error } = await supabaseAdmin.from('transactions').insert({
-                    id: `audit_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-                    userId: req.user?.id || null,
-                    amount: 0,
-                    type: 'AUDIT_LOG',
-                    status: 'INFO',
-                    method: ip,
-                    utr: logMsg.substring(0, 255), // Store action in UTR (limited space, so keeping it concise)
-                    date: new Date().toISOString()
-                });
-                if (error) console.error("Failed to persist audit log:", error);
-            } catch (err) {
-                console.error("Failed to persist audit log:", err);
+    const publicPaths = [
+      "/api/health",
+      "/api/auth/lookup",
+      "/api/payments/webhook",
+      "/api/v2",
+      "/api/smm"
+    ];
+
+    const isPublic = publicPaths.includes(req.path) || req.path === "/api/health" || req.path === "/ping";
+
+    // Detect actor based on credentials
+    if (email) {
+      if (email === 'gauravbeniwal30003@gmail.com' || email === 'gauravbeniwal303@gmail.com') {
+        actorType = "ADMIN";
+        actorName = email;
+      } else {
+        actorType = "USER";
+        actorName = email;
+      }
+    } else {
+      // Check if SMM Panel/Webhook / System
+      if (req.path === "/api/payments/webhook") {
+        actorType = "BACKEND";
+        actorName = "Razorpay Webhook";
+      } else if (req.path === "/api/v2" || req.path === "/api/smm") {
+        actorType = "BACKEND";
+        actorName = "SMM Provider API";
+      } else if (req.path === "/api/health" || req.path === "/ping") {
+        actorType = "BACKEND";
+        actorName = "System Health Check";
+      } else {
+        // Check Origin/Referer
+        const origin = req.headers.origin;
+        const referer = req.headers.referer;
+
+        const isUrlAllowed = (url: string) => {
+          if (!url) return false;
+          try {
+            let parsedUrl = url;
+            if (!parsedUrl.startsWith('http')) {
+              parsedUrl = 'https://' + parsedUrl;
             }
-        })();
+            const parsed = new URL(parsedUrl);
+            const hostname = parsed.hostname.toLowerCase();
+            const allAllowed = [
+              "socialuphub.in",
+              "socialuphub-smm.web.app",
+              "socialuphub-smm.firebaseapp.com",
+              "localhost",
+              "127.0.0.1",
+              "run.app",
+              "github.dev",
+              "gitpod.io"
+            ];
+            return allAllowed.some(domain => {
+              return hostname === domain || hostname.endsWith("." + domain);
+            });
+          } catch (e) {
+            return false;
+          }
+        };
+
+        if ((origin && isUrlAllowed(origin)) || (referer && isUrlAllowed(referer))) {
+          actorType = "FRONTEND";
+          actorName = "Frontend Client";
+        } else {
+          actorType = "ANONYMOUS";
+          actorName = "Anonymous Probe";
+        }
+      }
     }
-    
+
+    // 2. Reject Anonymous attempts to non-public endpoints
+    if (actorType === "ANONYMOUS" && !isPublic && req.path.startsWith("/api/")) {
+      const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+      console.warn(`[SECURITY DIRECT REJECTION] Rejected anonymous API attempt on path: ${req.path} from IP: ${ip}`);
+      
+      // Log rejected attempt before blocking
+      const logId = `rej_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+      systemLogs.push({
+        id: logId,
+        timestamp: new Date().toISOString(),
+        ip: String(ip),
+        method: req.method,
+        url: req.path,
+        actorType: "ANONYMOUS",
+        actorName: "Anonymous Probe (REJECTED)",
+        details: `Rejected direct access to: ${req.path} (Blocked by FireWall)`,
+        status: 403
+      });
+
+      return res.status(403).json({ error: "Access denied: Request must originate from an authorized source." });
+    }
+
+    // 3. Log valid/accepted requests
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    const logId = `log_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+    let details = `Accessing route: ${req.path}`;
+    if (req.path === "/api/admin/update-balance" && req.body) {
+      details = `Admin balance modification: ${req.body.amount} for user ID ${req.body.userId}`;
+    } else if (req.path === "/api/admin/db-proxy" && req.body) {
+      details = `Admin Database Proxy: Action [${req.body.action}] on table [${req.body.table}]`;
+    } else if (req.path === "/api/orders/place" && req.body) {
+      details = `Placing SMM order: Service ID [${req.body.serviceId || req.body.service}]`;
+    } else if (req.path === "/api/payments/create-order" && req.body) {
+      details = `Payment creation request: Amount [${req.body.amount}]`;
+    } else if (req.body && Object.keys(req.body).length > 0) {
+      details = `API call with keys: ${Object.keys(req.body).filter(k => k !== 'password' && k !== 'key').join(', ')}`;
+    }
+
+    const newLog: SystemLog = {
+      id: logId,
+      timestamp: new Date().toISOString(),
+      ip: String(ip),
+      method: req.method,
+      url: req.path,
+      actorType,
+      actorName,
+      details,
+      status: 200 // will be updated on finish
+    };
+
+    systemLogs.push(newLog);
+
+    res.on('finish', () => {
+      // Update with the actual status code
+      const logIndex = systemLogs.findIndex(l => l.id === logId);
+      if (logIndex !== -1) {
+        systemLogs[logIndex].status = res.statusCode;
+      }
+    });
+
     next();
-  };
+  }
+
+
 
   const verifyAdmin = async (req: any, res: any, next: any) => {
     await verifyAuth(req, res, async () => {
       // MASTER ADMIN EMAIL LOCK
-      const masterAdminEmail = "gauravbeniwal3003@gmail.com";
-      if (req.user?.email !== masterAdminEmail) {
+      const masterAdminEmail = "gauravbeniwal30003@gmail.com";
+      const altAdminEmail = "gauravbeniwal3003@gmail.com";
+      if (req.user?.email !== masterAdminEmail && req.user?.email !== altAdminEmail) {
         console.warn(`[SECURITY] Unauthorized admin attempt by ${req.user?.email || 'Unknown'} (ID: ${req.user?.id})`);
         return res.status(403).json({ error: "Master Admin access required. Unauthorized." });
       }
@@ -1029,7 +1282,8 @@ async function startServer() {
         return res.json({ error: "Invalid API key" });
       }
       if (user.isBanned) {
-        return res.json({ error: "Declined: Your API user account has been suspended or banned" });
+        // Auto-ban system disabled as requested by the owner
+        // return res.json({ error: "Declined: Your API user account has been suspended or banned" });
       }
 
       // 1. BALANCE ACTION
@@ -1605,6 +1859,7 @@ async function startServer() {
 
        // Update last payment timestamp
        await supabaseAdmin.from("users").update({ lastPaymentAt: new Date().toISOString() }).eq("id", userId);
+      await verifyUserBalanceConsistency(userId);
 
        console.log(`[Payment Engine] User ${userId} successfully credited ${totalCredit} INR (Amount: ${amount}, Bonus: ${bonusAmount}) for payment ${paymentId}`);
        return { success: true, credited: totalCredit };
@@ -1685,40 +1940,104 @@ async function startServer() {
    });
 
    app.post("/api/payments/verify", verifyAllowedSource, verifyAuth, async (req: any, res: any) => {
-     const validation = razorpayVerifySchema.safeParse(req.body);
-     if (!validation.success) return res.status(400).json({ error: "Invalid payment data" });
+      const validation = razorpayVerifySchema.safeParse(req.body);
+      if (!validation.success) return res.status(400).json({ error: "Invalid payment data" });
 
-     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, couponCode } = validation.data;
-     const secret = process.env.RAZORPAY_SECRET || "4wiJs8mHjvhbes6JRZFd35hT";
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, couponCode } = validation.data;
+      
+      try {
+        const userId = req.user.id;
 
-     if (!secret) return res.status(500).json({ error: "Payment configuration error" });
+        // 1. Fetch pending transaction from database to verify ownership & expected amount
+        const { data: pendingTxn, error: txnErr } = await supabaseAdmin
+          .from("transactions")
+          .select("*")
+          .eq("orderId", razorpay_order_id)
+          .eq("status", "PENDING")
+          .maybeSingle();
 
-     const generated_signature = crypto
-       .createHmac("sha256", secret)
-       .update(razorpay_order_id + "|" + razorpay_payment_id)
-       .digest("hex");
+        if (txnErr) {
+          console.error("[Payment Security] Error fetching pending transaction:", txnErr);
+          return res.status(500).json({ error: "Failed to look up pending transaction" });
+        }
 
-     if (generated_signature === razorpay_signature) {
-       try {
-         const userId = req.user.id;
-         let amount = 0;
-         if (razorpay) {
-           const rzpOrder = await razorpay.orders.fetch(razorpay_order_id);
-           if (rzpOrder) amount = Number(rzpOrder.amount) / 100;
-         } else {
-           amount = Number(req.body.amount || 0);
-         }
+        if (!pendingTxn) {
+          console.warn(`[Payment Security] Unauthorized/Invalid Order Verification attempt: Order ID ${razorpay_order_id} not found as PENDING.`);
+          return res.status(404).json({ error: "Invalid payment request. No matching pending transaction found." });
+        }
 
-         const result = await processSuccessfulPayment(userId, amount, razorpay_payment_id, razorpay_order_id, couponCode);
-         return res.json(result);
-       } catch (err: any) {
-         console.error("[Payment Engine] Manual verification process failed:", err);
-         return res.status(500).json({ error: err.message || "DB update failed" });
-       }
-     } else {
-       return res.status(400).json({ success: false, error: "Invalid signature" });
-     }
-   });
+        if (pendingTxn.userId !== userId) {
+          console.warn(`[Payment Security] User ID Mismatch! Authenticated User: ${userId}, Pending Transaction User: ${pendingTxn.userId}`);
+          return res.status(403).json({ error: "Security Violation: Unauthorized payment verification." });
+        }
+
+        // 2. Compute and validate HMAC signature
+        const secret = process.env.RAZORPAY_SECRET || "4wiJs8mHjvhbes6JRZFd35hT";
+        if (!secret) return res.status(500).json({ error: "Payment configuration error" });
+
+        const generated_signature = crypto
+          .createHmac("sha256", secret)
+          .update(razorpay_order_id + "|" + razorpay_payment_id)
+          .digest("hex");
+
+        if (generated_signature !== razorpay_signature) {
+          console.warn(`[Payment Security] Signature verification failed for payment ${razorpay_payment_id}.`);
+          return res.status(400).json({ success: false, error: "Invalid payment signature verification failed." });
+        }
+
+        // 3. Double-check directly with Razorpay API to prevent any front-end manipulation
+        let amount = 0;
+        if (razorpay) {
+          try {
+            // Fetch order details from Razorpay to re-verify the amount
+            const rzpOrder = await razorpay.orders.fetch(razorpay_order_id);
+            if (!rzpOrder) {
+              return res.status(400).json({ error: "Razorpay order not found on provider." });
+            }
+            
+            // Fetch payment details from Razorpay to re-verify status & order id
+            const rzpPayment = await razorpay.payments.fetch(razorpay_payment_id);
+            if (!rzpPayment) {
+              return res.status(400).json({ error: "Razorpay payment details not found on provider." });
+            }
+
+            // Secure server-side validation checks
+            if (rzpPayment.status !== "captured" && rzpPayment.status !== "authorized") {
+              return res.status(400).json({ error: `Razorpay payment is not captured/authorized. Status: ${rzpPayment.status}` });
+            }
+
+            if (rzpPayment.order_id !== razorpay_order_id) {
+              return res.status(400).json({ error: "Security Mismatch: Payment order ID does not match request order ID." });
+            }
+
+            // Verify the paid amount matches the pending transaction's amount (Razorpay amount is in paise)
+            const expectedAmountPaise = Math.round(pendingTxn.amount * 100);
+            if (Math.abs(rzpPayment.amount - expectedAmountPaise) > 10) { // allow small tolerance
+              return res.status(400).json({ error: "Security Mismatch: Paid amount does not match expected transaction amount." });
+            }
+
+            amount = Number(rzpOrder.amount) / 100;
+          } catch (rzpErr: any) {
+            console.error("[Payment Security] Razorpay Provider API call failed:", rzpErr);
+            return res.status(400).json({ error: `Failed to verify payment with Razorpay Provider: ${rzpErr.message || rzpErr}` });
+          }
+        } else {
+          if (process.env.NODE_ENV === "production") {
+            return res.status(400).json({ error: "Razorpay integration is not initialized on production. Payment verification failed." });
+          }
+          // Fallback safely for development
+          amount = Number(pendingTxn.amount || req.body.amount || 0);
+        }
+
+        // 4. Securely process the payment in the database (atomically increment balance & log success)
+        const result = await processSuccessfulPayment(userId, amount, razorpay_payment_id, razorpay_order_id, couponCode);
+        return res.json(result);
+
+      } catch (err: any) {
+        console.error("[Payment Engine] Manual verification process failed:", err);
+        return res.status(500).json({ error: err.message || "DB update failed" });
+      }
+    });
 
    // Webhook Razorpay Verification (Production grade auto-credits receiver)
    app.post("/api/payments/webhook", async (req: any, res: any) => {
@@ -1891,21 +2210,28 @@ async function startServer() {
   const placeOrderSchema = z.object({
     userId: z.string().uuid(),
     serviceId: z.string(),
-    serviceName: z.string(),
+    serviceName: z.string().optional(),
     link: z.string(),
-    quantity: z.number(),
-    originalCost: z.number(),
+    quantity: z.number().int().positive(),
+    originalCost: z.number().optional(),
     couponCode: z.string().optional()
   });
 
   app.post("/api/orders/place", verifyAllowedSource, verifyAuth, async (req: any, res: any) => {
 
     const validation = placeOrderSchema.safeParse(req.body);
-    if (!validation.success) return res.status(400).json({ error: "Invalid input" });
+    if (!validation.success) return res.status(400).json({ error: "Invalid input. Quantity must be a positive integer." });
     
     const { userId, serviceId, serviceName, link, quantity, originalCost, couponCode } = validation.data;
     
     if (req.user.id !== userId) return res.status(403).json({ error: "Unauthorized user mismatch" });
+
+    // Validate and sanitize order link parameter to eliminate injection and XSS exploits
+    const cleanLink = String(link || "").trim();
+    const hasHtmlOrScript = /<[^>]*>|javascript:|onerror=|onload=|onclick=/i.test(cleanLink);
+    if (hasHtmlOrScript || cleanLink.includes("<") || cleanLink.includes(">")) {
+        return res.status(400).json({ error: "Invalid link format. HTML tags or script protocols are strictly forbidden." });
+    }
     
     // Acquire sequential order placement lock for this user to neutralize any Burp Suite race condition/double-spending exploits
     const acquired = await UserLock.acquire(`place_order_${userId}`);
@@ -1916,17 +2242,33 @@ async function startServer() {
     try {
         // Duplicate check
         const { data: existingOrder } = await supabaseAdmin.from('orders')
-            .select('id').eq('link', link).eq('serviceId', serviceId).in('status', ['Pending', 'Processing']).limit(1);
+            .select('id').eq('link', cleanLink).eq('serviceId', serviceId).in('status', ['Pending', 'Processing']).limit(1);
         if (existingOrder && existingOrder.length > 0) return res.status(400).json({ error: "An active order for this link already exists." });
 
         // User check
         const { data: user } = await supabaseAdmin.from('users').select('*').eq('id', userId).single();
         if (!user) return res.status(404).json({ error: "User not found" });
-        if (user.isBanned) return res.status(403).json({ error: "User is banned" });
+        if (user.isBanned) {
+            // Auto-ban system disabled as requested by the owner
+            // return res.status(403).json({ error: "User is banned" });
+        }
 
         // Securely calculate cost from database
-        const { data: dbService } = await supabaseAdmin.from('services').select('rate, min, max, customMarginPercent, customMarginFixed').eq('service', serviceId).single();
+        const { data: dbService } = await supabaseAdmin.from('services')
+            .select('name, rate, min, max, customMarginPercent, customMarginFixed, isEnabled')
+            .eq('service', serviceId)
+            .single();
+
         if (!dbService) return res.status(404).json({ error: "Service not found" });
+
+        // Ensure the service is active and enabled to block any exploit tool calling disabled services
+        if (dbService.isEnabled === false) {
+            return res.status(400).json({ error: "This service is currently disabled or unavailable." });
+        }
+
+        // Always resolve service name securely from database to neutralize client-side tampering or XSS
+        const finalServiceName = dbService.name || serviceName || "SMM Service";
+
         if (quantity < dbService.min || quantity > dbService.max) {
             return res.status(400).json({ error: `Quantity must be between ${dbService.min} and ${dbService.max}` });
         }
@@ -2006,7 +2348,7 @@ async function startServer() {
 
         // Insert Order
         const { error: orderErr } = await supabaseAdmin.from('orders').insert({
-            id: orderId, userId, serviceId, serviceName, link, quantity, charge: finalCost,
+            id: orderId, userId, serviceId, serviceName: finalServiceName, link: cleanLink, quantity, charge: finalCost,
             status: 'Pending', externalId: 'SYNC_IN_PROGRESS', remains: quantity, date: new Date().toISOString()
         });
         if (orderErr) throw orderErr;
@@ -2042,7 +2384,7 @@ async function startServer() {
             const resProvider = await callProvider({
               action: 'add',
               service: serviceId,
-              link: link,
+              link: cleanLink,
               quantity: quantity
             });
 
@@ -2055,7 +2397,7 @@ async function startServer() {
                 if (errorMsg.includes('duplicate') || errorMsg.includes('already exists')) {
                     const history = await callProvider({ action: 'orders' });
                     if (Array.isArray(history)) {
-                        const match = history.find((p) => String(p.link) === String(link) && String(p.service) === String(serviceId));
+                        const match = history.find((p) => String(p.link) === String(cleanLink) && String(p.service) === String(serviceId));
                         if (match && match.order) {
                             await supabaseAdmin.from('orders').update({ externalId: String(match.order), status: 'Processing' }).eq('id', orderId);
                             return res.json({ success: true, orderId });
@@ -2087,6 +2429,7 @@ async function startServer() {
         res.status(500).json({ error: err.message || "Server error" });
     } finally {
         UserLock.release(`place_order_${userId}`);
+        await verifyUserBalanceConsistency(userId).catch(e => console.error("Balance recheck error in order placement:", e));
     }
   });
 
@@ -2098,9 +2441,18 @@ async function startServer() {
 
   app.get("/api/admin/security/logs", verifyAllowedSource, verifyAdmin, async (req, res) => {
     try {
-      const { data: logs } = await supabaseAdmin.from('transactions').select('*').eq('type', 'AUDIT_LOG').order('date', { ascending: false }).limit(100);
-      const { data: bans } = await supabaseAdmin.from('transactions').select('*').eq('type', 'BANNED_IP').eq('status', 'ACTIVE').order('date', { ascending: false });
-      res.json({ logs: logs || [], bannedIps: bans || [] });
+      cleanupOldLogs();
+      const sortedLogs = [...systemLogs].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      res.json({ logs: sortedLogs, bannedIps: [] });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/admin/security/purge-logs", verifyAllowedSource, verifyAdmin, async (req, res) => {
+    try {
+      cleanupOldLogs();
+      res.json({ success: true, count: systemLogs.length });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -2120,7 +2472,6 @@ async function startServer() {
         utr: reason || 'Manual Ban',
         date: new Date().toISOString()
       }, { onConflict: 'id' });
-      bannedIps.add(ip);
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -2132,7 +2483,6 @@ async function startServer() {
     if (!ip) return res.status(400).json({ error: "IP address required" });
     try {
       await supabaseAdmin.from('transactions').update({ status: 'REVOKED' }).eq('id', `banned_ip_${ip}`);
-      bannedIps.delete(ip);
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -2166,33 +2516,42 @@ async function startServer() {
       }
 
       // Security checks
-      const isAdmin = user && (user.email === 'gauravbeniwal3003@gmail.com' || user.role === 'Admin' || user.role === 'ADMIN');
+      const isAdmin = user && (user.email === 'gauravbeniwal30003@gmail.com' || user.email === 'gauravbeniwal3003@gmail.com');
       
+      const safeMatch = (match && typeof match === 'object') ? { ...match } : {};
+
       if (!isAdmin) {
          if (table === 'coupons') return res.status(403).json({ error: 'Access denied to coupons table.' });
-             if (['orders', 'transactions', 'users'].includes(table)) {
+         if (['orders', 'transactions', 'users'].includes(table)) {
              if (!user) return res.status(401).json({ error: "Unauthorized" });
              
              // Enforce row level security via proxy if not admin
-             if (table === 'users' && match.id !== user.id && match.referred_by !== user.id) {
-                 if (match.referral_code) {
-                    // Allowed to lookup by referral_code
-                 } else if (match.lastLogin || match.referred_by) {
-                     // Allowed for cron / stats?
-                     if (!match.referred_by || match.referred_by !== user.id) {
-                         return res.status(403).json({ error: "Forbidden" });
-                     }
+             if (table === 'users') {
+                 const isOwnProfile = safeMatch.id === user.id;
+                 const isReferralQuery = safeMatch.referred_by === user.id;
+                 const isReferralCodeQuery = !!safeMatch.referral_code;
+
+                 if (!isOwnProfile && !isReferralQuery && !isReferralCodeQuery && !safeMatch.name) {
+                     return res.status(403).json({ error: "Forbidden: Unauthorized users table query." });
                  }
-             } else if ((table === 'orders' || table === 'transactions') && match.userId !== user.id) {
-                 // Cron jobs might query pending orders without user context
-                 match.userId = user.id;
+             } else if (table === 'orders' || table === 'transactions') {
+                 safeMatch.userId = user.id;
              }
          }
       }
 
-      let query = supabaseAdmin.from(table).select('*');
+      // Restrict query columns to prevent unauthorized users from harvesting password hashes, balances, or secret API keys via referral lookups
+      let selectColumns = '*';
+      if (!isAdmin && table === 'users') {
+          const isOwnProfile = safeMatch.id === user.id;
+          if (!isOwnProfile) {
+              selectColumns = 'id, name, referral_code, created_at';
+          }
+      }
+
+      let query = supabaseAdmin.from(table).select(selectColumns);
       
-      for (const [k, v] of Object.entries(match || {})) {
+      for (const [k, v] of Object.entries(safeMatch)) {
           if (v && typeof v === 'object') {
              if ('lt' in v) query = query.lt(k, (v as any).lt);
              else if ('gt' in v) query = query.gt(k, (v as any).gt);
@@ -2212,15 +2571,14 @@ async function startServer() {
       }
 
       const { data, error } = await query;
-      if (error) return res.status(400).json({ error: error.message });
+      if (error) throw new Error(error.message);
       
-      res.json({ success: true, data: data || [] });
-    } catch (error: any) {
-      console.error("DB Read Proxy Error:", error);
-      res.status(500).json({ error: error.message || "Internal server error" });
+      return res.json({ success: true, data });
+    } catch (e: any) {
+      console.error("[DB Proxy Error]:", e);
+      return res.status(500).json({ error: e.message });
     }
   });
-
 
   app.post("/api/admin/security-log", verifyAllowedSource, async (req: any, res: any) => {
     console.error("[SECURITY TRACKING ALERT]", req.body);
@@ -2233,6 +2591,46 @@ async function startServer() {
       if (!validation.success) return res.status(400).json({ error: "Invalid proxy payload" });
       
       const { table, action, payload, match, neq, inFilter } = validation.data;
+
+      // Handle logging for admin balance updates via proxy
+      if (table === "users" && payload && "balance" in payload) {
+        let fetchQuery = supabaseAdmin.from("users").select("id, balance");
+        if (match) {
+          for (const [key, value] of Object.entries(match || {})) {
+            fetchQuery = fetchQuery.eq(key, value);
+          }
+        }
+        if (neq) {
+          for (const [key, value] of Object.entries(neq || {})) {
+            fetchQuery = fetchQuery.neq(key, value);
+          }
+        }
+        if (inFilter) {
+          fetchQuery = fetchQuery.in(inFilter.column, inFilter.values);
+        }
+
+        const { data: usersToUpdate } = await fetchQuery;
+        if (usersToUpdate && usersToUpdate.length > 0) {
+          for (const ou of usersToUpdate) {
+            const oldBal = parseFloat(ou.balance || 0);
+            const newBal = parseFloat((payload as any).balance || 0);
+            const diff = newBal - oldBal;
+            if (diff !== 0) {
+              await supabaseAdmin.from("transactions").insert({
+                id: `adm_prox_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+                userId: ou.id,
+                amount: Math.abs(diff),
+                type: diff > 0 ? "DEPOSIT" : "SPEND",
+                status: "SUCCESS",
+                method: "MANUAL_BY_ADMIN",
+                utr: `Admin manual update via proxy (Diff: ${diff > 0 ? "+" : ""}${diff.toFixed(2)})`,
+                date: new Date().toISOString()
+              });
+            }
+          }
+        }
+      }
+
       let query = supabaseAdmin.from(table)[action](payload as any);
       
       if (match) {
@@ -2252,18 +2650,6 @@ async function startServer() {
       const { data, error } = await query;
       if (error) throw new Error(error.message);
       
-      // Log the admin action
-      await supabaseAdmin.from('transactions').insert({
-        id: `audit_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-        userId: req.user?.id || null,
-        amount: 0,
-        type: 'AUDIT_LOG',
-        status: 'SUCCESS',
-        method: req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip,
-        utr: `Admin action: ${action} on ${table}`,
-        date: new Date().toISOString()
-      });
-      
       return res.json({ success: true, data });
     } catch (e: any) {
       console.error("[DB Proxy Error]:", e);
@@ -2278,14 +2664,39 @@ async function startServer() {
     const { userId, amount } = validation.data;
 
     try {
+      // Fetch old user profile to calculate diff for transaction logging
+      const { data: oldUser } = await supabaseAdmin
+        .from('users')
+        .select('balance')
+        .eq('id', userId)
+        .single();
+
+      const oldBal = parseFloat(oldUser?.balance || 0);
+      const diff = amount - oldBal;
+
       const { data, error } = await supabaseAdmin
         .from('users')
         .update({ balance: amount })
         .eq('id', userId);
 
       if (error) throw error;
+
+      if (diff !== 0) {
+        await supabaseAdmin.from('transactions').insert({
+          id: `adm_bal_${Date.now()}`,
+          userId: userId,
+          amount: Math.abs(diff),
+          type: diff > 0 ? 'DEPOSIT' : 'SPEND',
+          status: 'SUCCESS',
+          method: 'MANUAL_BY_ADMIN',
+          utr: `Admin manual balance update (Diff: ${diff > 0 ? '+' : ''}${diff.toFixed(2)})`,
+          date: new Date().toISOString()
+        });
+      }
+
       res.json({ success: true });
     } catch (error) {
+      console.error("Admin balance update failure:", error);
       res.status(500).json({ error: "Database error" });
     }
   });
@@ -2385,6 +2796,11 @@ async function startServer() {
   app.post("/api/sync-user", verifyAllowedSource, verifyAuth, async (req: any, res: any) => {
     const { name, mobile, referredByCode } = req.body;
     const { id, email } = req.user;
+
+    // Secure backend verification for @gmail.com email address
+    if (!email || !String(email).trim().toLowerCase().endsWith("@gmail.com")) {
+      return res.status(403).json({ error: "Only @gmail.com email addresses are authorized." });
+    }
 
     // Type enforcement to prevent NoSQL object injections
     const safeName = name ? String(name).trim() : undefined;

@@ -2269,7 +2269,7 @@ export const AdminPanel: React.FC = () => {
     { id: "COUPONS", label: "Coupons", icon: <Tag size={20} /> },
     { id: "SETTINGS", label: "Config", icon: <Settings size={20} /> },
     { id: "API", label: "APIs", icon: <Code size={20} /> },
-    { id: "SECURITY", label: "Security", icon: <ShieldAlert size={20} /> },
+    { id: "SECURITY", label: "Logs", icon: <ShieldAlert size={20} /> },
   ];
 
   const renderContent = () => {
