@@ -57,7 +57,7 @@ const handleSupabaseError = (error: any) => {
 };
 
 // Robust helper to parse and validate JSON responses from the backend proxy/services
-async function handleJsonResponse(response: Response, defaultErrorMsg: string): Promise<any> {
+export async function handleJsonResponse(response: Response, defaultErrorMsg: string): Promise<any> {
     const contentType = response.headers.get("content-type");
     if (contentType && contentType.includes("application/json")) {
         try {
@@ -398,18 +398,20 @@ const getRenderBackendUrl = (): string => {
     if (typeof window !== 'undefined') {
         const hostname = window.location.hostname.toLowerCase();
         
-        // Check if we are running in local dev server or AI Studio preview
-        const isLocalOrPreview = 
+        // Check if we are running in local dev server, AI Studio preview, or Vercel
+        const isLocalOrProxySupported = 
             hostname === 'localhost' ||
             hostname === '127.0.0.1' ||
             hostname === '0.0.0.0' ||
             hostname.includes('asia-east1.run.app') || // AI Studio previews
             hostname.includes('.local') ||
             hostname.includes('gitpod.io') ||
-            hostname.includes('github.dev');
+            hostname.includes('github.dev') ||
+            hostname.includes('vercel.app') ||       // Vercel Preview/Prod URL
+            hostname === 'socialuphub.in';           // Production custom domain on Vercel
 
-        if (isLocalOrPreview) {
-            // In local development or AI Studio preview, the API server runs on the same origin (port 3000)
+        if (isLocalOrProxySupported) {
+            // In local development, AI Studio preview, or Vercel, the API server can run or be proxied on the same origin (port 3000 or Vercel rewrites)
             return window.location.origin;
         }
     }
@@ -472,17 +474,11 @@ export async function adminDbProxy(payload: any) {
 };
 
 export function getBaseApiUrl(): string {
-    if (typeof window !== 'undefined') {
-        const hn = window.location.hostname;
-        if (hn !== 'socialuphub.in' && hn !== 'socialuphub-smm.web.app' && hn !== 'socialuphub-smm.firebaseapp.com') {
-            return window.location.origin;
-        }
-    }
     if (import.meta.env.VITE_API_URL) {
         return import.meta.env.VITE_API_URL.replace(/\/$/, "");
     }
     return getRenderBackendUrl().replace(/\/$/, "");
-};
+}
 
 // --- UPDATED API CALLER USING SECURE BACKEND PROXY ---
 const callSmmApi = async (params: URLSearchParams, retries = 2): Promise<any> => {

@@ -17,7 +17,7 @@ import {
   HelpCircle
 } from 'lucide-react';
 import { useAuth } from '../../App';
-import { getBaseApiUrl } from '../../services/mockStore';
+import { getBaseApiUrl, handleJsonResponse } from '../../services/mockStore';
 
 export const SecurityManagement = ({ notify }: { notify: (msg: string, type: 'success' | 'error') => void }) => {
     const { user } = useAuth();
@@ -36,8 +36,7 @@ export const SecurityManagement = ({ notify }: { notify: (msg: string, type: 'su
             const res = await fetch(`${backendBase}/api/admin/security/logs`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error || "Failed to fetch forensic logs");
+            const data = await handleJsonResponse(res, "Failed to fetch forensic logs");
             
             setLogs(data.logs || []);
         } catch (e: any) {
@@ -57,8 +56,7 @@ export const SecurityManagement = ({ notify }: { notify: (msg: string, type: 'su
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${token}` }
             });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error || "Failed to purge old logs");
+            const data = await handleJsonResponse(res, "Failed to purge old logs");
             
             notify("Logs older than 3 hours successfully purged!", "success");
             fetchLogs();
