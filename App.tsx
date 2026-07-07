@@ -1,6 +1,6 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import { SecurityTracker } from './components/SecurityTracker';
 import LandingPage from './components/landing/LandingPage';
@@ -91,6 +91,8 @@ const App: React.FC = () => {
   const [view, setView] = useState<'LANDING' | 'DASHBOARD' | 'AUTH' | 'BANNED' | 'MAINTENANCE'>('LANDING');
   const [authLoading, setAuthLoading] = useState(true);
   const [banTimeRemaining, setBanTimeRemaining] = useState<string>('');
+  const navigate = useNavigate();
+  const location = useLocation();
 
   // Scroll to top of viewport on any view or route change
   useEffect(() => {
@@ -114,19 +116,48 @@ const App: React.FC = () => {
       return 'ALLOWED';
   };
 
+  // Synchronize view state with URL pathname to prevent direct refresh 404s/state loss
   useEffect(() => {
-    // Check maintenance mode on config change or user change
-    if (config?.maintenanceMode) {
-        if (!user || user.role !== UserRole.ADMIN || user.email !== 'gauravbeniwal30003@gmail.com') {
-            setView('MAINTENANCE');
-            return;
-        }
-    }
+    if (authLoading) return;
+
+    const path = location.pathname.toLowerCase();
     
-    if (user && view === 'MAINTENANCE' && user.role === UserRole.ADMIN && user.email === 'gauravbeniwal30003@gmail.com') {
-        setView('DASHBOARD');
+    // Check maintenance mode first
+    if (config?.maintenanceMode) {
+      if (!user || user.role !== UserRole.ADMIN || user.email !== 'gauravbeniwal30003@gmail.com') {
+        setView('MAINTENANCE');
+        return;
+      }
     }
-  }, [config, user, view]);
+
+    if (path === '/login' || path === '/signin' || path === '/auth' || path === '/register' || path === '/signup') {
+      if (!user) {
+        setView('AUTH');
+      } else {
+        setView('DASHBOARD');
+        // Redirect to dashboard subpage if they had one, else default dashboard
+        if (!location.pathname.startsWith('/dashboard') && !location.pathname.startsWith('/admin')) {
+          navigate('/dashboard');
+        }
+      }
+    } else if (path === '/' || path === '') {
+      if (!user) {
+        setView('LANDING');
+      } else {
+        setView('DASHBOARD');
+        navigate('/dashboard');
+      }
+    } else if (path.startsWith('/dashboard') || path.startsWith('/admin')) {
+      if (!user) {
+        setView('AUTH');
+        // Save the intended destination so they can be redirected after successful login
+        localStorage.setItem('redirect_after_login', location.pathname);
+        navigate('/login');
+      } else {
+        setView('DASHBOARD');
+      }
+    }
+  }, [location.pathname, user, authLoading, config?.maintenanceMode]);
 
   useEffect(() => {
     if (user) {
@@ -220,8 +251,21 @@ const App: React.FC = () => {
                   
                   const banStatus = checkBanStatus(data.user);
                   setUser({ ...data.user, id: session.user.id });
-                  if (banStatus !== 'ALLOWED') setView('BANNED');
-                  else if (view === 'AUTH' || view === 'LANDING') setView('DASHBOARD');
+                  if (banStatus !== 'ALLOWED') {
+                      setView('BANNED');
+                  } else {
+                      const redirectUrl = localStorage.getItem('redirect_after_login');
+                      if (redirectUrl && (redirectUrl.startsWith('/dashboard') || redirectUrl.startsWith('/admin'))) {
+                          localStorage.removeItem('redirect_after_login');
+                          setView('DASHBOARD');
+                          navigate(redirectUrl);
+                      } else {
+                          if (view === 'AUTH' || view === 'LANDING') {
+                              setView('DASHBOARD');
+                              navigate('/dashboard');
+                          }
+                      }
+                  }
               } else {
                   throw new Error("No user profile returned from sync API.");
               }
@@ -554,8 +598,16 @@ const App: React.FC = () => {
         }
     }, [syncError]);
 
-    // Auto-fill referral code from URL hash, search query, or localStorage
+    // Auto-fill referral code and sync active mode based on route
     useEffect(() => {
+        // Handle path-based mode
+        const path = window.location.pathname.toLowerCase();
+        if (path === '/register' || path === '/signup') {
+            setMode('REGISTER');
+        } else if (path === '/login' || path === '/signin') {
+            setMode('LOGIN');
+        }
+
         // 1. Check URL Hash
         const hash = window.location.hash;
         let code = '';
@@ -609,7 +661,7 @@ const App: React.FC = () => {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0a110c]/80 backdrop-blur-sm p-4">
         <div className="bg-[var(--app-card-bg)] border border-[var(--app-border)] p-6 md:p-8 rounded-3xl w-full max-w-md shadow-2xl relative animate-in fade-in zoom-in duration-200 text-[var(--app-text)] max-h-[95vh] overflow-y-auto">
-            <button onClick={() => setView('LANDING')} className="absolute top-5 right-5 text-[var(--app-text-muted)] hover:text-[var(--app-text)] text-lg">✕</button>
+            <button onClick={() => { setView('LANDING'); navigate('/'); }} className="absolute top-5 right-5 text-[var(--app-text-muted)] hover:text-[var(--app-text)] text-lg">✕</button>
             <div className="flex justify-center mb-6">
                 <Logo />
             </div>
@@ -848,11 +900,23 @@ const App: React.FC = () => {
 
   const CurrentView = () => {
     if (view === 'MAINTENANCE') return <MaintenanceScreen />;
-    if (view === 'LANDING') return <LandingPage onGetStarted={() => setView('AUTH')} />;
+    if (view === 'LANDING') return <LandingPage onGetStarted={() => { setView('AUTH'); navigate('/login'); }} />;
     if (view === 'AUTH') return <><LandingPage onGetStarted={() => {}} /><AuthModal /></>;
     if (view === 'BANNED') return <BannedScreen />;
     return <Layout>{user?.role === UserRole.ADMIN && user?.email === 'gauravbeniwal30003@gmail.com' ? <AdminPanel /> : <Dashboard />}</Layout>;
   };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#0a110c] flex flex-col items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <Logo />
+          <div className="w-12 h-12 border-4 border-[#2ebd59] border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-[#8fa896] text-xs font-semibold uppercase tracking-widest font-mono">Verifying Session...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <AuthContext.Provider value={{ user, login, loginWithGoogle, register, logout }}>

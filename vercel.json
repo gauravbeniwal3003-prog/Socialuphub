@@ -1,12 +1,43 @@
 {
   "cleanUrls": true,
+  "headers": [
+    {
+      "source": "/:path*",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com https://www.gstatic.com https://*.razorpay.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https://*; connect-src 'self' https://* wss://*; font-src 'self' https://fonts.gstatic.com data:; frame-src 'self' https://api.razorpay.com https://*.supabase.co https://*.razorpay.com; frame-ancestors 'self' https://ai.studio https://*.google.com https://*.googleusercontent.com https://*.run.app; object-src 'none';"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "SAMEORIGIN"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-XSS-Protection",
+          "value": "1; mode=block"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=()"
+        }
+      ]
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/:path*",
       "destination": "https://socialuphub-backend.onrender.com/api/:path*"
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!api|assets|static|.*\\..*$).*)",
       "destination": "/index.html"
     }
   ]
