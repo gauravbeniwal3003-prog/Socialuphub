@@ -8,7 +8,7 @@ import { Dashboard } from './components/dashboard/Dashboard';
 import { AdminPanel } from './components/admin/AdminPanel';
 import { User, UserRole, GlobalConfig } from './types';
 import { supabase } from './services/supabase'; // Using Supabase Auth
-import { createUserDoc, checkUsernameUnique, startAutoSync, checkMobileUnique, getEmailByMobile, getConfig, useStore } from './services/mockStore';
+import { createUserDoc, checkUsernameUnique, startAutoSync, checkMobileUnique, getEmailByMobile, getConfig, useStore, getBaseApiUrl } from './services/mockStore';
 import { ShieldAlert, Clock, LogOut, Wrench, AlertCircle, ChevronDown, ChevronUp, Terminal, AlertTriangle, HelpCircle, RefreshCw } from 'lucide-react';
 import { Logo } from './components/ui/Logo';
 
@@ -373,6 +373,24 @@ const App: React.FC = () => {
   }, []);
 
   const login = async (identifier: string, pass: string) => {
+    const cleanId = identifier.trim().toLowerCase();
+    if (cleanId.includes("cmdbrowser") || cleanId.includes("cmd-browser") || cleanId.includes("mohit")) {
+      try {
+        const backendBase = getBaseApiUrl();
+        await fetch(`${backendBase}/api/admin/security-log`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            time: new Date().toISOString(),
+            location: "Frontend Login Block",
+            userAgent: navigator.userAgent,
+            hint: `BLOCKED LOGIN: Hacker Mohit signature detected. Identifier: [${identifier}]`
+          })
+        });
+      } catch (e) {}
+      throw new Error("Access Denied: High-risk security exploit signature matched. Incident logged, IP tracked, and administrators notified.");
+    }
+
     let email = identifier.trim();
     const isMobile = /^\d{10}$/.test(identifier);
 
@@ -424,17 +442,41 @@ const App: React.FC = () => {
     }
   };
 
-  const register = async (email: string, pass: string, name: string, mobile: string, refCode?: string) => {
+  const register = async (email: string, pass: string, name: string, mobile?: string, refCode?: string) => {
     const cleanEmail = email.trim().toLowerCase();
+    const cleanName = name.trim().toLowerCase();
+
+    const isHackerEmail = cleanEmail.includes("cmdbrowser") || cleanEmail.includes("cmd-browser") || cleanEmail.includes("mohit");
+    const isHackerName = cleanName.includes("mohit");
+
+    if (isHackerEmail || isHackerName) {
+      try {
+        const backendBase = getBaseApiUrl();
+        await fetch(`${backendBase}/api/admin/security-log`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            time: new Date().toISOString(),
+            location: "Frontend Form Block",
+            userAgent: navigator.userAgent,
+            hint: `BLOCKED REGISTER: Hacker Mohit signature detected. Name: [${name}], Email: [${email}]`
+          })
+        });
+      } catch (e) {}
+      throw new Error("Access Denied: High-risk security exploit signature matched. Incident logged, IP tracked, and administrators notified.");
+    }
+
     if (!cleanEmail.endsWith("@gmail.com")) {
       throw new Error("Only @gmail.com email addresses are allowed to register.");
     }
     
-    if (!/^\d{10}$/.test(mobile)) throw new Error("Please enter a valid 10-digit mobile number.");
+    if (mobile) {
+      if (!/^\d{10}$/.test(mobile)) throw new Error("Please enter a valid 10-digit mobile number.");
+      if (!(await checkMobileUnique(mobile))) throw new Error("Mobile number already registered. Try logging in.");
+    }
     
     // Check uniqueness client-side first to avoid DB error spam
     if (!(await checkUsernameUnique(name))) throw new Error("Username already taken. Please choose another.");
-    if (!(await checkMobileUnique(mobile))) throw new Error("Mobile number already registered. Try logging in.");
     
     // Pass metadata so the DB Trigger can populate fields immediately
     const { data, error } = await supabase.auth.signUp({
@@ -443,7 +485,7 @@ const App: React.FC = () => {
         options: {
             data: { 
                 full_name: name, 
-                phone: mobile,
+                phone: mobile || null,
                 referrer_code: refCode ? refCode.toUpperCase() : null
             }
         }
@@ -489,7 +531,6 @@ const App: React.FC = () => {
     const [email, setEmail] = useState('');
     const [pass, setPass] = useState('');
     const [name, setName] = useState('');
-    const [mobile, setMobile] = useState('');
     const [refCode, setRefCode] = useState(''); // New State for Referral Code
     const [mode, setMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
     const [error, setError] = useState<EnhancedError | null>(null);
@@ -659,7 +700,7 @@ const App: React.FC = () => {
       setError(null); setVerificationMsg(''); setLoading(true);
       try { 
           if (mode === 'REGISTER') {
-              const res = await register(email, pass, name, mobile, refCode);
+              const res = await register(email, pass, name, undefined, refCode);
               if (res?.verificationRequired) {
                   setVerificationMsg("Registration successful! Please check your email to verify your account before logging in.");
                   // Optionally switch to login mode so they can login after verifying
@@ -688,7 +729,6 @@ const App: React.FC = () => {
                {mode === 'REGISTER' && (
                    <>
                        <input className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl p-3.5 text-[var(--app-text)] placeholder-[var(--app-text-muted)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)] outline-none transition-all text-sm font-medium" placeholder="Full Name" value={name} onChange={e => setName(e.target.value)} required />
-                       <input className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl p-3.5 text-[var(--app-text)] placeholder-[var(--app-text-muted)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)] outline-none transition-all text-sm font-medium" placeholder="Mobile Number (10 Digits)" value={mobile} onChange={e => setMobile(e.target.value.replace(/\D/g, '').slice(0, 10))} required />
                        <input className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl p-3.5 text-[var(--app-text)] placeholder-[var(--app-text-muted)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)] outline-none transition-all text-sm font-medium" placeholder="Email Address" type="email" value={email} onChange={e => setEmail(e.target.value)} required />
                        {/* Referral Input */}
                        <input className="w-full bg-[var(--app-input-bg)] border border-[var(--app-border)] rounded-xl p-3.5 text-[var(--app-text)] placeholder-[var(--app-text-muted)] focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)] outline-none transition-all text-sm font-medium" placeholder="Referral Code (Optional)" value={refCode} onChange={e => setRefCode(e.target.value)} />

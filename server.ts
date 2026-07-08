@@ -643,6 +643,16 @@ async function startServer() {
     keyGenerator: (req: any) => req.ip || req.headers['x-forwarded-for'] || 'order-limit'
   });
 
+  // Strict rate limit for auth lookups (e.g. max 15 lookups per 15 minutes per IP) to prevent user enum/PII harvesting
+  const authLookupLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 15,
+    message: { error: "Security Alert: Too many auth verification attempts. Please try again after 15 minutes." },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: any) => req.ip || req.headers['x-forwarded-for'] || 'auth-lookup-limit'
+  });
+
   app.use("/api/", generalLimiter);
   app.use("/api", securityAuditLogger);
 
@@ -1026,6 +1036,81 @@ async function startServer() {
           } catch (e) {}
         }
       }
+    }
+
+    // --- SECURITY INTRUSION CHECK: TRACK & MITIGATE HACKER "MOHIT" OR "@CMDBROWSER.COM" MAIL PIPELINES ---
+    let isHackerAttempt = false;
+    let hackerReason = "";
+
+    const checkStringForHacker = (str: any): boolean => {
+      if (!str) return false;
+      const val = String(str).toLowerCase().trim();
+      return val.includes("cmdbrowser.com") || 
+             val.includes("cmd-browser.com") || 
+             val.includes("cmdbrowser") ||
+             val.includes("cmd-browser") ||
+             val === "mohit" || 
+             val.includes("mohit@") ||
+             val.includes(".mohit") ||
+             val.includes("mohit ") ||
+             val.includes(" mohit") ||
+             val.startsWith("mohit") ||
+             val.endsWith("mohit") ||
+             val.includes("@cmdbrowser");
+    };
+
+    // Check request body for Mohit/cmdbrowser details
+    if (req.body) {
+      const fieldsToCheck = ['email', 'name', 'username', 'identifier', 'fullname', 'mobile'];
+      for (const field of fieldsToCheck) {
+        if (req.body[field] && typeof req.body[field] === 'string') {
+          if (checkStringForHacker(req.body[field])) {
+            isHackerAttempt = true;
+            hackerReason = `Hacker property [${field}: "${req.body[field]}"] matched known signature`;
+            break;
+          }
+        }
+      }
+    }
+
+    // Check JWT session email
+    if (email && checkStringForHacker(email)) {
+      isHackerAttempt = true;
+      hackerReason = `Hacker email [${email}] detected in session JWT`;
+    }
+
+    // Check URL query parameters
+    if (req.query) {
+      for (const [key, value] of Object.entries(req.query)) {
+        if (typeof value === 'string' && checkStringForHacker(value)) {
+          isHackerAttempt = true;
+          hackerReason = `Hacker query param [${key}: "${value}"] matched signature`;
+          break;
+        }
+      }
+    }
+
+    if (isHackerAttempt) {
+      const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+      console.error(`[SECURITY THREAT DETECTED] Blocked hacker Mohit/cmdbrowser on path: ${req.path} from IP: ${ip}. Reason: ${hackerReason}`);
+      
+      const logId = `hack_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+      systemLogs.push({
+        id: logId,
+        timestamp: new Date().toISOString(),
+        ip: String(ip),
+        method: req.method,
+        url: req.path,
+        actorType: "ANONYMOUS",
+        actorName: "MOHIT (HACKER DETECTED)",
+        details: `CRITICAL SEC ALERT: Blocked Mohit / CMD Browser exploit attempt. (${hackerReason})`,
+        status: 403
+      });
+
+      return res.status(403).json({ 
+        error: "Access Denied: High-risk security exploit signature matched. Incident logged, IP tracked, and administrators notified on the Forensic Security panel.",
+        hackerMitigated: true
+      });
     }
 
     const publicPaths = [
@@ -2581,6 +2666,29 @@ async function startServer() {
   });
 
   app.post("/api/admin/security-log", verifyAllowedSource, async (req: any, res: any) => {
+    cleanupOldLogs();
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    const { hint, userAgent, location } = req.body;
+    
+    const isHacker = hint && (
+      hint.toLowerCase().includes("mohit") || 
+      hint.toLowerCase().includes("cmdbrowser") || 
+      hint.toLowerCase().includes("cmd-browser")
+    );
+
+    const logId = `client_track_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    systemLogs.push({
+      id: logId,
+      timestamp: new Date().toISOString(),
+      ip: String(ip),
+      method: "POST",
+      url: "/api/admin/security-log",
+      actorType: "ANONYMOUS",
+      actorName: isHacker ? "MOHIT (HACKER DETECTED)" : "Security Tracker",
+      details: hint ? `Tracker Alert: ${hint} (UA: ${userAgent || 'none'}, Loc: ${location || 'unknown'})` : `Client-side forensic beacon received.`,
+      status: isHacker ? 403 : 200
+    });
+
     console.error("[SECURITY TRACKING ALERT]", req.body);
     res.json({ success: true });
   });
@@ -2733,18 +2841,23 @@ async function startServer() {
   });
 
   // Public auth helpers to bypass client-side RLS before login/signup
-  app.post("/api/auth/lookup", verifyAllowedSource, async (req: any, res: any) => {
+  app.post("/api/auth/lookup", verifyAllowedSource, authLookupLimiter, async (req: any, res: any) => {
     const { action, value } = req.body;
-    if (!action || !value) {
+    if (!action || value === undefined || value === null) {
       return res.status(400).json({ error: "Missing parameters" });
     }
 
+    const cleanValue = String(value).trim();
+
     try {
       if (action === "getEmailByMobile") {
+        if (!/^\d{10}$/.test(cleanValue)) {
+          return res.status(400).json({ error: "Invalid mobile number format. Must be exactly 10 digits." });
+        }
         const { data, error } = await supabaseAdmin
           .from('users')
           .select('email')
-          .eq('mobile', String(value).trim())
+          .eq('mobile', cleanValue)
           .maybeSingle();
         
         if (error) throw error;
@@ -2752,10 +2865,13 @@ async function startServer() {
       }
 
       if (action === "checkUsernameUnique") {
+        if (cleanValue.length < 2 || cleanValue.length > 50) {
+          return res.status(400).json({ error: "Invalid username length." });
+        }
         const { data, error } = await supabaseAdmin
           .from('users')
           .select('id')
-          .eq('name', String(value).trim())
+          .eq('name', cleanValue)
           .maybeSingle();
 
         if (error) throw error;
@@ -2763,10 +2879,13 @@ async function startServer() {
       }
 
       if (action === "checkMobileUnique") {
+        if (!/^\d{10}$/.test(cleanValue)) {
+          return res.status(400).json({ error: "Invalid mobile number format. Must be exactly 10 digits." });
+        }
         const { data, error } = await supabaseAdmin
           .from('users')
           .select('id')
-          .eq('mobile', String(value).trim())
+          .eq('mobile', cleanValue)
           .maybeSingle();
 
         if (error) throw error;
@@ -2807,9 +2926,13 @@ async function startServer() {
     const safeMobile = mobile ? String(mobile).trim() : undefined;
     const safeReferredByCode = referredByCode ? String(referredByCode).trim() : undefined;
 
-    // Validate lengths
+    // Validate formats & lengths
     if (safeName && safeName.length > 50) return res.status(400).json({ error: "Name too long." });
-    if (safeMobile && safeMobile.length > 15) return res.status(400).json({ error: "Mobile too long." });
+    if (safeMobile) {
+      if (!/^\d{10}$/.test(safeMobile)) {
+        return res.status(400).json({ error: "Invalid mobile number. Must be exactly 10 digits." });
+      }
+    }
     if (safeReferredByCode && safeReferredByCode.length > 20) return res.status(400).json({ error: "Referral code too long." });
 
     try {
