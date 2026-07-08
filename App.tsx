@@ -470,6 +470,22 @@ const App: React.FC = () => {
       throw new Error("Only @gmail.com email addresses are allowed to register.");
     }
     
+    // Send signup details to backend validation first to filter out potential SQL injections / exploits
+    try {
+      const backendBase = getBaseApiUrl();
+      const checkRes = await fetch(`${backendBase}/api/auth/validate-signup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: cleanEmail, name: cleanName, password: pass, mobile, refCode })
+      });
+      const checkData = await checkRes.json();
+      if (!checkRes.ok || !checkData.success) {
+        throw new Error(checkData.error || "Pre-signup security check failed.");
+      }
+    } catch (e: any) {
+      throw new Error(e.message || "Unable to connect to security verification server.");
+    }
+    
     if (mobile) {
       if (!/^\d{10}$/.test(mobile)) throw new Error("Please enter a valid 10-digit mobile number.");
       if (!(await checkMobileUnique(mobile))) throw new Error("Mobile number already registered. Try logging in.");

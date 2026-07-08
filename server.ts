@@ -2899,6 +2899,107 @@ async function startServer() {
     }
   });
 
+  // Comprehensive SQL Injection & XSS pattern detector
+  function detectExploitPatterns(value: string): { matched: boolean; pattern?: string } {
+    const lower = value.toLowerCase();
+    
+    // SQL injection payloads / signatures
+    const sqlRegexes = [
+      /('|")\s*(or|and)\s+.*=.*(--|\/\*|#)?/i,                     // ' or 1=1 --
+      /(union\s+all\s+select|union\s+select)/i,                     // UNION SELECT
+      /(select\s+.*\s+from|insert\s+into|delete\s+from|drop\s+table|update\s+.*\s+set)/i, // Basic SQL CRUD DDL
+      /(--|\/\*|\*\/|#\s*$)/,                                       // Comments or SQL commands
+      /(xp_cmdshell|pg_sleep|sleep\s*\(|benchmark\s*\()/i,          // RCE & Time delays
+      /exec(\s+char|\s+xp_|\s+sp_|\s+execute)/i,                     // Stored procedures
+      /concat\s*\(\s*(char|'|")/i,                                  // Concat strings bypasses
+    ];
+
+    for (const regex of sqlRegexes) {
+      if (regex.test(lower)) {
+        return { matched: true, pattern: `SQL Injection Pattern: ${regex.toString()}` };
+      }
+    }
+
+    // Direct string checks for SQL syntax high-risk constructs
+    const directKeywords = [
+      "or 1=1", "or '1'='1'", "or \"1\"=\"1\"", 
+      "and 1=1", "and '1'='1'", "and \"1\"=\"1\"",
+      "drop database", "drop table", "truncate table", 
+      "union select", "select current_user", "select pg_sleep",
+      "<script>", "javascript:", "onload=", "onerror="
+    ];
+
+    for (const keyword of directKeywords) {
+      if (lower.includes(keyword)) {
+        return { matched: true, pattern: `Malicious Keyword/XSS Pattern: "${keyword}"` };
+      }
+    }
+
+    return { matched: false };
+  }
+
+  // Pre-validate signup details on the backend (Filters for SQL injection and exploits)
+  app.post("/api/auth/validate-signup", verifyAllowedSource, authLookupLimiter, async (req: any, res: any) => {
+    const { email, name, password, mobile, refCode } = req.body;
+    
+    // Check if any of these values contain malicious SQL injection or XSS patterns
+    const inputs = { email, name, password, mobile, refCode };
+    for (const [key, val] of Object.entries(inputs)) {
+      if (val && typeof val === "string") {
+        const exploitResult = detectExploitPatterns(val);
+        if (exploitResult.matched) {
+          const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+          console.error(`[SQL INJECTION/EXPLOIT BLOCKED] on ${key}: "${val}" from IP: ${ip}. Pattern: ${exploitResult.pattern}`);
+          
+          // Log to Forensic Security Panel live
+          const logId = `exploit_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+          systemLogs.push({
+            id: logId,
+            timestamp: new Date().toISOString(),
+            ip: String(ip),
+            method: "POST",
+            url: "/api/auth/validate-signup",
+            actorType: "ANONYMOUS",
+            actorName: "HACKER / MALICIOUS IP",
+            details: `BLOCKED EXPLOIT ATTEMPT: SQL Injection signature detected in ${key}. Pattern matched: ${exploitResult.pattern}`,
+            status: 400
+          });
+          
+          return res.status(400).json({
+            error: "Security Alert: Malicious SQL injection or exploit characters detected in signup form. Your IP has been logged and reported.",
+            highRiskMatched: true
+          });
+        }
+      }
+    }
+
+    // Email validation
+    if (email && typeof email === 'string') {
+      const cleanEmail = email.trim().toLowerCase();
+      if (!cleanEmail.endsWith("@gmail.com")) {
+        return res.status(400).json({ error: "Only @gmail.com email addresses are allowed to register." });
+      }
+    }
+
+    // Name validation
+    if (name && typeof name === 'string') {
+      const cleanName = name.trim();
+      if (cleanName.length < 2 || cleanName.length > 50) {
+        return res.status(400).json({ error: "Username must be between 2 and 50 characters." });
+      }
+    }
+
+    // Mobile check if supplied
+    if (mobile && typeof mobile === 'string') {
+      const cleanMobile = mobile.trim();
+      if (!/^\d{10}$/.test(cleanMobile)) {
+        return res.status(400).json({ error: "Invalid mobile number. Must be exactly 10 digits." });
+      }
+    }
+
+    return res.json({ success: true, message: "Inputs are safe." });
+  });
+
   // Synchronize/Create User Profile safely bypassing RLS
 
   app.post("/api/users/generate-api-key", verifyAllowedSource, verifyAuth, async (req: any, res: any) => {
